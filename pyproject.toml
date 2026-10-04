@@ -1,0 +1,35 @@
+[project]
+name = "gridroute"
+version = "0.1.0"
+description = "Real-time H3 ride dispatch with learned ETAs and demand forecasting"
+requires-python = ">=3.12"
+dependencies = [
+    "redis>=5.0",
+    "h3>=4.1",
+    "numpy>=1.26",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "websockets>=13",
+    "httpx>=0.27",
+    "prometheus-client>=0.20",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "duckdb>=1.1"]
+data = ["duckdb>=1.1"]
+# api and ml extras get added as those milestones start
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["core*", "data*", "gateway*", "workers*", "sim*", "ml*", "eval*", "tools*"]
+
+[tool.setuptools.package-data]
+core = ["lua/*.lua"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"

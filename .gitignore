@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Data and artifacts (spec §5.4: not in git, shipped via GitHub Release)
+data/raw/
+data/*.parquet
+data/**/*.parquet
+data/*.osm.pbf
+models/*/v*/
+runs/
+
+# Web
+web/node_modules/
+web/.next/
+
+# Local env
+.env

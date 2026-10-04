@@ -1,0 +1,127 @@
+# GridRoute v2: local stack.
+#   docker compose up -d redis                       # just Redis (tests, local dev)
+#   docker compose up -d --build --scale ingest=2 --scale matcher=2
+#                                                    # full M1 loop: gateway :8000, workers, 5k drivers, riders
+#   docker compose --profile osrm up -d osrm         # M2: one-time download + preprocess (~15-30 min), serve on :5001
+# gateway, the other workers, web, prometheus and grafana get added here as they are built.
+
+x-app: &app
+  image: gridroute-app
+  pull_policy: never          # local image, built once by the gateway service below
+  environment:
+    REDIS_URL: redis://redis:6379/0
+    METRICS_PORT: "9100"         # workers serve /metrics here (Prometheus scrapes it in M2)
+  depends_on:
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  gateway:
+    <<: *app
+    build: .
+    command: ["uvicorn", "gateway.app:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "warning"]
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  ingest:
+    <<: *app
+    command: ["python", "-m", "workers.ingest"]
+
+  matcher:
+    <<: *app
+    command: ["python", "-m", "workers.matcher"]
+
+  reaper:
+    <<: *app
+    command: ["python", "-m", "workers.reaper"]
+
+  aggregator:
+    <<: *app
+    command: ["python", "-m", "workers.aggregator"]
+
+  sim:
+    <<: *app
+    command: ["python", "-m", "sim.main", "--drivers", "${SIM_DRIVERS:-5000}"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      GATEWAY_WS: ws://gateway:8000/ws/driver
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  riders:
+    <<: *app
+    command: ["python", "-m", "sim.riders", "--rate", "${RIDE_RATE:-5}"]
+    environment:
+      GATEWAY_HTTP: http://gateway:8000
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    # Live state only (spec §9): no AOF, no RDB snapshots; state rebuilds from pings within ~4 s.
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  # ---- OSRM (profile "osrm") ----------------------------------------------
+  # Data lives in a named volume, not the repo folder: the processed graph is several GB.
+  osrm-download:
+    profiles: ["osrm"]
+    image: curlimages/curl:8.10.1
+    user: root
+    volumes:
+      - osrm-data:/data
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f /data/region.osm.pbf ]; then echo "pbf present, skipping download"; exit 0; fi
+        curl -fL --retry 3 -o /data/region.osm.pbf.part "$${OSRM_PBF_URL}"
+        mv /data/region.osm.pbf.part /data/region.osm.pbf
+    environment:
+      OSRM_PBF_URL: ${OSRM_PBF_URL:-https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf}
+
+  osrm-prep:
+    profiles: ["osrm"]
+    image: ghcr.io/project-osrm/osrm-backend:v5.27.1
+    volumes:
+      - osrm-data:/data
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f /data/region.osrm.mldgr ]; then echo "graph already built, skipping"; exit 0; fi
+        osrm-extract -p /opt/car.lua /data/region.osm.pbf
+        osrm-partition /data/region.osrm
+        osrm-customize /data/region.osrm
+    depends_on:
+      osrm-download:
+        condition: service_completed_successfully
+
+  osrm:
+    profiles: ["osrm"]
+    image: ghcr.io/project-osrm/osrm-backend:v5.27.1
+    command: ["osrm-routed", "--algorithm", "mld", "--max-table-size", "10000", "/data/region.osrm"]
+    ports:
+      - "5001:5000"   # host 5000 is often taken (AirPlay / other dev servers)
+    volumes:
+      - osrm-data:/data
+    depends_on:
+      osrm-prep:
+        condition: service_completed_successfully
+
+volumes:
+  osrm-data:
