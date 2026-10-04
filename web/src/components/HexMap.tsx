@@ -14,7 +14,7 @@ import type { Cell, Match } from "@/lib/types";
 
 const STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 const PULSE_MS = 5000;
-const CAB: RGB = [247, 181, 0];
+const PULSE: RGB = [255, 255, 255];
 
 function DeckOverlay(props: MapboxOverlayProps) {
   const overlay = useControl(() => new MapboxOverlay(props));
@@ -82,7 +82,7 @@ export default function HexMap({ cells, layer, max, matches, selected, onSelect,
         opacity: 0.88,
         pickable: true,
         autoHighlight: true,
-        highlightColor: [247, 181, 0, 90],
+        highlightColor: [255, 255, 255, 60],
         updateTriggers: { getFillColor: [layer, max] },
         transitions: { getFillColor: 350 },
         ...under,
@@ -93,9 +93,9 @@ export default function HexMap({ cells, layer, max, matches, selected, onSelect,
         getHexagon: (c) => c[0],
         filled: false,
         stroked: true,
-        getLineColor: CAB,
+        getLineColor: [255, 255, 255],
         lineWidthUnits: "pixels",
-        getLineWidth: 2.5,
+        getLineWidth: 2,
         ...under,
       }),
       new ScatterplotLayer<Match>({
@@ -106,10 +106,10 @@ export default function HexMap({ cells, layer, max, matches, selected, onSelect,
         filled: true,
         radiusUnits: "pixels",
         lineWidthUnits: "pixels",
-        getRadius: (m) => 4 + 26 * Math.min(1, (now - m.at) / PULSE_MS) ** 0.6,
-        getFillColor: (m) => [...CAB, Math.round(200 * (1 - (now - m.at) / PULSE_MS) ** 3)] as [number, number, number, number],
-        getLineColor: (m) => [...CAB, Math.round(255 * (1 - (now - m.at) / PULSE_MS))] as [number, number, number, number],
-        getLineWidth: 2,
+        getRadius: (m) => 3 + 20 * Math.min(1, (now - m.at) / PULSE_MS) ** 0.6,
+        getFillColor: (m) => [...PULSE, Math.round(140 * (1 - (now - m.at) / PULSE_MS) ** 3)] as [number, number, number, number],
+        getLineColor: (m) => [...PULSE, Math.round(220 * (1 - (now - m.at) / PULSE_MS))] as [number, number, number, number],
+        getLineWidth: 1.5,
         updateTriggers: { getRadius: now, getFillColor: now, getLineColor: now },
       }),
     ];

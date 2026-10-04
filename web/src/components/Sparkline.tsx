@@ -47,8 +47,8 @@ export function Sparkline({ values, times, color, label, format }: Props) {
         <path d={line} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
         {hover != null && hv != null && (
           <>
-            <line x1={x(hover)} x2={x(hover)} y1="0" y2={H} stroke="var(--ink-3)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-            <circle cx={x(hover)} cy={y(hv)} r="3" fill={color} stroke="var(--panel)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+            <line x1={x(hover)} x2={x(hover)} y1="0" y2={H} stroke="var(--text-3)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            <circle cx={x(hover)} cy={y(hv)} r="3" fill={color} stroke="var(--surface)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
           </>
         )}
       </svg>
