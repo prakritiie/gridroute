@@ -11,7 +11,18 @@ if seq <= last then return 0 end                      -- stale / out-of-order pi
 local old_cell = redis.call('HGET', KEYS[1], 'cell')
 local status = redis.call('HGET', KEYS[1], 'status') or 'available'
 if status == 'assigned' and redis.call('EXISTS', KEYS[2]) == 0 then
-  status = 'available'                                 -- lease expired: trip_done was lost
+  status = 'available'                                 -- lease expired: trip_done (or the offer) was lost
+  -- Close the abandoned ride in the same step. Without this it stays 'assigned' to a driver who is
+  -- about to be matched again: a stranded rider, and two open rides naming one driver.
+  local ride = redis.call('HGET', KEYS[1], 'ride')
+  if ride then
+    local rkey = 'ride:' .. ride
+    if redis.call('HGET', rkey, 'status') == 'assigned' and redis.call('HGET', rkey, 'driver') == id then
+      redis.call('HSET', rkey, 'status', 'expired', 't_expired', ts)
+      redis.call('XADD', 'stream:events', 'MAXLEN', '~', 1000000, '*',
+                 'type', 'lease_expired', 'ride', ride, 'driver', id, 't', ts)
+    end
+  end
   redis.call('HDEL', KEYS[1], 'ride')
 end
 

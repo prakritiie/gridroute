@@ -74,3 +74,34 @@ def test_lease_expiry_revives(r, s):
     assert h["status"] == "available" and "ride" not in h
     assert cells_of(r, "d1") == [CELL_B]
     assert audit(r) == []
+
+
+def test_lease_expiry_closes_the_abandoned_ride(r, s):
+    """Regression (found live): an offer lost while the gateway was down left ride r1 'assigned' forever.
+    After the lease expired the driver was matched again, and two open rides named the same driver."""
+    t = now_ms()
+    s.move_driver("d1", CELL_A, 40.758, -73.985, seq=1, ts_ms=t)
+    queue_ride(r, "r1")
+    assert s.claim_driver("d1", "r1", now_ms=t, lease_ms=50) is Claim.CLAIMED
+    time.sleep(0.15)                                      # the driver never heard about r1; lease runs out
+
+    assert s.move_driver("d1", CELL_A, 40.758, -73.985, seq=2, ts_ms=now_ms())
+    assert r.hget("ride:r1", "status") == "expired"
+    ev = r.xrange("stream:events")[-1][1]
+    assert (ev["type"], ev["ride"], ev["driver"]) == ("lease_expired", "r1", "d1")
+
+    queue_ride(r, "r2")
+    assert s.claim_driver("d1", "r2", now_ms=now_ms()) is Claim.CLAIMED
+    assert audit(r) == []                                 # before the fix: "d1 double-booked on rides [r1, r2]"
+
+
+def test_lease_expiry_leaves_rides_owned_by_others_alone(r, s):
+    t = now_ms()
+    s.move_driver("d1", CELL_A, 40.758, -73.985, seq=1, ts_ms=t)
+    queue_ride(r, "r1")
+    s.claim_driver("d1", "r1", now_ms=t, lease_ms=50)
+    r.hset("ride:r1", mapping={"status": "completed"})     # already finished through another path
+    time.sleep(0.15)
+    s.move_driver("d1", CELL_A, 40.758, -73.985, seq=2, ts_ms=now_ms())
+    assert r.hget("ride:r1", "status") == "completed"
+    assert not r.exists("stream:events")
