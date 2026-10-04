@@ -5,7 +5,7 @@ INGEST ?= 2
 MATCHERS ?= 2
 RIDE_RATE ?= 5
 
-.PHONY: install up down stack osrm gateway sim riders ingest matcher reaper aggregator web data test audit
+.PHONY: install up down stack osrm gateway sim riders ingest matcher reaper aggregator web data clean test audit
 
 install:
 	$(PY) -m pip install -e ".[dev]"
@@ -46,8 +46,14 @@ aggregator:
 web:           ## ops dashboard on :3000 (needs the gateway on :8000)
 	cd web && npm run dev
 
-data:          ## Jan-Jun 2016 trips -> $$GRIDROUTE_DATA_DIR/raw (resumable, hours)
+data:          ## Jan-Jun 2016 trips -> $$GRIDROUTE_DATA_DIR/raw (resumable, ~3.5 h), then clean + data card
 	$(PY) -m data.download
+	$(PY) -m data.clean
+	$(PY) -m data.card
+
+clean:         ## re-run the cleaning rules (data/clean.sql) and regenerate docs/data_card.md
+	$(PY) -m data.clean
+	$(PY) -m data.card
 
 test: up
 	$(PY) -m pytest

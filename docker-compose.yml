@@ -92,7 +92,9 @@ services:
         curl -fL --retry 3 -o /data/region.osm.pbf.part "$${OSRM_PBF_URL}"
         mv /data/region.osm.pbf.part /data/region.osm.pbf
     environment:
-      OSRM_PBF_URL: ${OSRM_PBF_URL:-https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf}
+      # BBBike's NYC-area extract (lng -74.36..-73.67, lat 40.48..40.96) covers the whole service bbox at a
+      # third of the NY-state file's size, so the graph builds comfortably inside Docker's 8 GB.
+      OSRM_PBF_URL: ${OSRM_PBF_URL:-https://download.bbbike.org/osm/bbbike/NewYork/NewYork.osm.pbf}
 
   osrm-prep:
     profiles: ["osrm"]
