@@ -60,7 +60,13 @@ class Ingest:
 
     def step(self, block_ms: int = 1000) -> int:
         """Read one batch of new entries, apply, ack. Returns number of entries handled."""
-        resp = self.r.xreadgroup(GROUP, self.consumer, {STREAM: ">"}, count=self.batch, block=block_ms)
+        try:
+            resp = self.r.xreadgroup(GROUP, self.consumer, {STREAM: ">"}, count=self.batch, block=block_ms)
+        except redis.ResponseError as e:
+            if "NOGROUP" not in str(e):
+                raise
+            self._ensure_group()                    # stream or group was deleted under us: recreate, carry on
+            return 0
         if not resp:
             return 0
         return self._handle(resp[0][1])

@@ -86,11 +86,7 @@ class Matcher:
         self.max_attempts = config.MAX_ATTEMPTS
         self.policy = config.MATCH_POLICY
         self.registry = EtaRegistry(r)
-        try:
-            r.xgroup_create(RIDES, GROUP, id="0", mkstream=True)
-        except redis.ResponseError as e:
-            if "BUSYGROUP" not in str(e):
-                raise
+        self._ensure_group()
 
     # ---- stream plumbing -------------------------------------------------
     def step(self, block_ms: int | None = None) -> int:
@@ -99,8 +95,21 @@ class Matcher:
         self.max_attempts = int(self.r.get("config:max_attempts") or config.MAX_ATTEMPTS)
         policy = self.r.get("config:policy") or config.MATCH_POLICY
         self.policy = policy if policy in POLICIES else "greedy-distance"
-        resp = self.r.xreadgroup(GROUP, self.consumer, {RIDES: ">"}, count=self.batch, block=block_ms)
+        try:
+            resp = self.r.xreadgroup(GROUP, self.consumer, {RIDES: ">"}, count=self.batch, block=block_ms)
+        except redis.ResponseError as e:
+            if "NOGROUP" not in str(e):
+                raise
+            self._ensure_group()                    # stream or group was deleted under us: recreate, carry on
+            return 0
         return self._handle_batch(resp[0][1] if resp else [])
+
+    def _ensure_group(self) -> None:
+        try:
+            self.r.xgroup_create(RIDES, GROUP, id="0", mkstream=True)
+        except redis.ResponseError as e:
+            if "BUSYGROUP" not in str(e):
+                raise
 
     def reclaim(self) -> int:
         """Take over rides a crashed matcher read but never acked."""

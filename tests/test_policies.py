@@ -135,3 +135,26 @@ def test_gateway_explain_endpoint(r, monkeypatch):
     with TestClient(app) as c:
         assert c.get("/rides/r9/explain").json()["chosen"] == "d1"
         assert c.get("/rides/nope/explain").status_code == 404
+
+
+def test_reset_keeps_model_pointer_and_consumer_groups(r, s):
+    """Regression: replay --reset used FLUSHDB, wiping model:eta:current (a whole replay ran on the B3 fallback)
+    and the consumer groups (workers crashed on NOGROUP)."""
+    from tools.reset import reset_sim_state
+    from workers.ingest import Ingest
+    r.set("model:eta:current", "v1")
+    Matcher(r, consumer="t")
+    Ingest(r, consumer="t")
+    _scenario(r, s)
+    reset_sim_state(r)
+    assert r.get("model:eta:current") == "v1"
+    assert not list(r.scan_iter("driver:*")) and not list(r.scan_iter("ride:*")) and not r.exists("rides:open")
+    groups = {s_: [g["name"] for g in r.xinfo_groups(s_)] for s_ in ("stream:rides", "stream:pings")}
+    assert groups == {"stream:rides": ["match"], "stream:pings": ["ingest"]} and r.xlen("stream:rides") == 0
+
+
+def test_workers_survive_a_deleted_stream(r):
+    m = Matcher(r, consumer="t")
+    r.delete("stream:rides")                       # e.g. someone runs FLUSHDB anyway
+    assert m.step() == 0                           # no NOGROUP crash
+    assert [g["name"] for g in r.xinfo_groups("stream:rides")] == ["match"]

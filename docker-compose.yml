@@ -65,7 +65,7 @@ services:
 
   riders:
     <<: *app
-    command: ["python", "-m", "sim.riders", "--rate", "${RIDE_RATE:-5}"]
+    command: ["python", "-m", "sim.riders", "--rate", "${RIDE_RATE:-3}"]   # ~58% fleet utilisation with real-street trip times
     environment:
       GATEWAY_HTTP: http://gateway:8000
     depends_on:

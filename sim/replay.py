@@ -32,6 +32,7 @@ from core import clock, config, osrm
 from sim.agents import IDLE, Fleet, Leg, straight_route
 from sim.congestion import Congestion, hour_of_week
 from sim.transport import WebSocketTransport
+from tools.reset import reset_sim_state
 from workers.recorder import record
 
 TICK_S = 0.5                 # wall seconds per tick
@@ -115,7 +116,7 @@ class Replay:
     async def run(self) -> str:
         a = self.a
         if a.reset:
-            self.r.flushdb()
+            reset_sim_state(self.r)          # keeps model pointers and consumer groups (not FLUSHDB)
         elif self.r.scard("active_cells"):
             raise SystemExit("Redis already has live drivers: stop the demo sim/riders and pass --reset")
         span = (self.t1 - self.t0).total_seconds()
@@ -230,7 +231,7 @@ def main() -> None:
     ap.add_argument("--drain-min", type=float, default=20, help="sim minutes after the window to finish trips")
     ap.add_argument("--gateway-http", default="http://localhost:8000")
     ap.add_argument("--gateway-ws", default="ws://localhost:8000/ws/driver")
-    ap.add_argument("--reset", action="store_true", help="FLUSHDB the simulated Redis state first")
+    ap.add_argument("--reset", action="store_true", help="clear simulated state first (tools/reset.py)")
     a = ap.parse_args()
 
     rp = Replay(a)

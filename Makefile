@@ -3,7 +3,7 @@ PY ?= python
 DRIVERS ?= 5000
 INGEST ?= 2
 MATCHERS ?= 2
-RIDE_RATE ?= 5
+RIDE_RATE ?= 3
 
 .PHONY: install up down stack osrm gateway sim riders ingest matcher reaper aggregator web data clean congestion replay report features train evaluate bench test audit
 
