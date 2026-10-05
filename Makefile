@@ -5,7 +5,7 @@ INGEST ?= 2
 MATCHERS ?= 2
 RIDE_RATE ?= 5
 
-.PHONY: install up down stack osrm gateway sim riders ingest matcher reaper aggregator web data clean test audit
+.PHONY: install up down stack osrm gateway sim riders ingest matcher reaper aggregator web data clean congestion replay report test audit
 
 install:
 	$(PY) -m pip install -e ".[dev]"
@@ -19,7 +19,7 @@ stack:         ## full M1 loop in containers: gateway :8000, workers, simulator,
 down:
 	docker compose --profile osrm down
 
-osrm:          ## one-time: download NY extract, build the MLD graph, serve on :5001
+osrm:          ## one-time: download the NYC extract, build the MLD graph (~1 min), serve on :5001
 	docker compose --profile osrm up -d osrm
 
 gateway:       ## host processes below need `make up` (Redis) and run one per terminal
@@ -54,6 +54,16 @@ data:          ## Jan-Jun 2016 trips -> $$GRIDROUTE_DATA_DIR/raw (resumable, ~3.
 clean:         ## re-run the cleaning rules (data/clean.sql) and regenerate docs/data_card.md
 	$(PY) -m data.clean
 	$(PY) -m data.card
+
+congestion:    ## June congestion factors = the simulator's ground-truth travel times (needs OSRM)
+	$(PY) -m data.congestion --sample 500000
+
+SEED ?= 1
+replay:        ## R0 protocol: Tue 7 Jun 2016 07-09, 20% demand, 1,600 drivers, x10 (stop the demo sim/riders first)
+	$(PY) -m sim.replay --seed $(SEED) --reset
+
+report:        ## results table from every recorded run -> docs/results.md
+	$(PY) -m eval.report --write docs/results.md
 
 test: up
 	$(PY) -m pytest

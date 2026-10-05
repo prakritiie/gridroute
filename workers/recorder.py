@@ -1,0 +1,62 @@
+"""Recorder: one run's events -> runs/{run_id}/ for the evaluation report (spec arrows 15, 28).
+
+Stream IDs are millisecond timestamps, so a run's events are exactly XRANGE stream:events start..end:
+no consumer group or run tagging needed, and re-recording a run is idempotent.
+
+    runs/{run_id}/events.parquet   every event in the run (match, batch, pickup, dropoff, unmatched, ...)
+    runs/{run_id}/rides.parquet    final state of every ride the replay requested, plus its real facts
+    runs/{run_id}/run.json         the run configuration
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import duckdb
+import redis
+
+EVENT_COLUMNS = ["id", "type", "ride", "driver", "t", "sim_t", "leg_s", "leg_m", "osrm_s", "wait_s", "match_s",
+                 "trip_s", "trip_m", "dist_m", "eta_s", "attempts", "ms", "n",
+                 "drivers", "sim_hours", "empty_km", "loaded_km", "conflicts"]
+NUMERIC = set(EVENT_COLUMNS) - {"id", "type", "ride", "driver"}
+
+
+def _events(r: redis.Redis, start_id: str, end_id: str) -> list[dict]:
+    out, cursor = [], start_id
+    while True:
+        batch = r.xrange("stream:events", min=cursor, max=end_id, count=10_000)
+        if cursor != start_id:
+            batch = batch[1:] if batch and batch[0][0] == cursor else batch
+        if not batch:
+            return out
+        out += [{"id": i, **f} for i, f in batch]
+        cursor = batch[-1][0]
+
+
+def record(r: redis.Redis, run_id: str, start_id: str, end_id: str, rides: dict[str, dict], cfg: dict,
+           runs_dir: Path) -> Path:
+    out = runs_dir / run_id
+    out.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect()
+
+    events = _events(r, start_id, end_id)
+    con.execute("CREATE TABLE ev (" + ", ".join(
+        f"{c} {'DOUBLE' if c in NUMERIC else 'VARCHAR'}" for c in EVENT_COLUMNS) + ")")
+    con.executemany(f"INSERT INTO ev VALUES ({', '.join('?' * len(EVENT_COLUMNS))})", [
+        [(float(e[c]) if e.get(c) not in (None, "") else None) if c in NUMERIC else e.get(c) for c in EVENT_COLUMNS]
+        for e in events])
+    con.execute(f"COPY ev TO '{(out / 'events.parquet').as_posix()}' (FORMAT parquet)")
+
+    pipe = r.pipeline(transaction=False)
+    ids = list(rides)
+    for rid in ids:
+        pipe.hmget(f"ride:{rid}", "status", "driver", "attempts")
+    states = pipe.execute()
+    con.execute("""CREATE TABLE rd (ride VARCHAR, status VARCHAR, driver VARCHAR, attempts INTEGER,
+                                    req_sim DOUBLE, assigned_sim DOUBLE, real_trip_s DOUBLE)""")
+    con.executemany("INSERT INTO rd VALUES (?, ?, ?, ?, ?, ?, ?)", [
+        [rid, s[0], s[1], int(s[2]) if s[2] else 0, rides[rid]["req_sim"], rides[rid].get("assigned_sim"),
+         float(rides[rid]["real_s"])] for rid, s in zip(ids, states)])
+    con.execute(f"COPY rd TO '{(out / 'rides.parquet').as_posix()}' (FORMAT parquet)")
+    (out / "run.json").write_text(json.dumps({"run_id": run_id, **cfg, "events": len(events), "rides": len(ids)}, indent=2))
+    return out

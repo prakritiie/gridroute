@@ -41,8 +41,9 @@ def test_matches_nearest_driver_and_publishes_offer(r, s):
     offer = json.loads(sub.get_message(timeout=2)["data"])
     assert offer == {"type": "assignment", "driver_id": "near", "ride_id": "r1", "pickup": list(PICKUP),
                      "eta_s": int(ride["eta_pred"]), "dropoff": [40.76, -73.97]}
-    ev = r.xrange(EVENTS)[-1][1]
-    assert ev["type"] == "match" and ev["driver"] == "near"
+    ev = next(f for _, f in r.xrange(EVENTS) if f["type"] == "match")
+    assert ev["driver"] == "near"
+    assert any(f["type"] == "batch" and float(f["ms"]) >= 0 for _, f in r.xrange(EVENTS))
     assert r.xpending(RIDES, GROUP)["pending"] == 0
     assert audit(r) == []
 

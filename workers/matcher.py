@@ -63,6 +63,7 @@ class Matcher:
         self.claim_idle_ms = claim_idle_ms
         self.stats = Stats()
         self.decision_ms: list[float] = []
+        self.max_attempts = config.MAX_ATTEMPTS
         try:
             r.xgroup_create(RIDES, GROUP, id="0", mkstream=True)
         except redis.ResponseError as e:
@@ -72,6 +73,8 @@ class Matcher:
     # ---- stream plumbing -------------------------------------------------
     def step(self, block_ms: int | None = None) -> int:
         """Match one batch of new rides. Returns how many stream entries were handled."""
+        # Run-level knob: a replay sets rider patience in sim time, so retries scale with replay speed
+        self.max_attempts = int(self.r.get("config:max_attempts") or config.MAX_ATTEMPTS)
         resp = self.r.xreadgroup(GROUP, self.consumer, {RIDES: ">"}, count=self.batch, block=block_ms)
         return self._handle_batch(resp[0][1] if resp else [])
 
@@ -93,6 +96,9 @@ class Matcher:
         self.r.xack(RIDES, GROUP, *[e[0] for e in entries])
         self.decision_ms.append((time.perf_counter() - t0) * 1000)
         metrics.decision_latency.observe(self.decision_ms[-1])
+        # Per-batch latency in the event log, so each replay run reports its own decision p99
+        self.r.xadd(EVENTS, {"type": "batch", "ms": round(self.decision_ms[-1], 2), "n": len(entries),
+                             "t": int(time.time() * 1000)}, maxlen=1_000_000, approximate=True)
         return len(entries)
 
     # ---- one ride ---------------------------------------------------------
@@ -134,7 +140,7 @@ class Matcher:
             metrics.claim_conflicts.inc()
 
         attempts = self.r.hincrby(ride_key(ride_id), "attempts", 1)
-        if attempts >= config.MAX_ATTEMPTS:
+        if attempts >= self.max_attempts:
             if self.scripts.unmatch_ride(ride_id, now):
                 self.r.xadd(EVENTS, {"type": "unmatched", "ride": ride_id, "t": now},
                             maxlen=1_000_000, approximate=True)

@@ -235,6 +235,14 @@ async def driver_socket(ws: WebSocket) -> None:
                     metrics.pings_received.inc(len(pings))
             elif kind == "register":
                 sockets.register(ws, [str(d) for d in msg.get("driver_ids", [])])
+            elif kind == "event":
+                # Simulator-observed facts the system can't see itself (pickup arrival, drop-off, fleet
+                # totals), recorded with everything else for the evaluation report.
+                ev = msg.get("event") or {}
+                fields = {str(k)[:32]: v for k, v in list(ev.items())[:24]
+                          if isinstance(v, (str, int, float)) and not isinstance(v, bool)}
+                if fields.get("type"):
+                    await r.xadd(EVENTS, fields, maxlen=1_000_000, approximate=True)
             elif kind == "trip_done":
                 d, ride = str(msg.get("driver_id", "")), str(msg.get("ride_id", ""))
                 ok = await app.state.scripts.release_driver(d, ride, now_ms())
