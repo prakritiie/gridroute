@@ -86,9 +86,21 @@ class Fleet:
         d.mode, d.ride_id = ROUTING, ride_id
         return True
 
-    def start_leg(self, driver_id: str, leg: Leg) -> None:
+    def start_leg(self, driver_id: str, leg: Leg) -> bool:
+        """Start a leg, unless the ride was cancelled while its route was being fetched."""
         d = self.drivers[driver_id]
+        if d.ride_id != leg.ride_id or d.mode != ROUTING:
+            return False
         d.leg, d.mode = leg, (TO_PICKUP if leg.kind == "pickup" else ON_TRIP)
+        return True
+
+    def cancel(self, driver_id: str, ride_id: str) -> bool:
+        """The offer lapsed before the accept landed: drop the ride where the driver stands."""
+        d = self.drivers.get(driver_id)
+        if d is None or d.ride_id != ride_id:
+            return False
+        d.mode, d.ride_id, d.leg = IDLE, None, None
+        return True
 
     def advance(self, sim_t: float) -> list[tuple[str, Driver, Leg]]:
         """Move everyone to sim_t. Returns finished legs as ("pickup" | "trip", driver, leg)."""

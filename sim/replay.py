@@ -157,7 +157,11 @@ class Replay:
                 d = self.fleet.drivers.get(msg["driver_id"])
                 if ride and d and self.fleet.accept(d.id, msg["ride_id"]):
                     ride["assigned_sim"] = now
+                    await self.tx.accept(d.id, msg["ride_id"])
                     self._spawn(self._route_leg(d.id, "pickup", msg["ride_id"], (d.lat, d.lng), ride["pickup"], None))
+
+            for driver_id, ride_id in self.tx.drain_rejected():
+                self.fleet.cancel(driver_id, ride_id)
 
             # movement, arrivals
             for kind, d, leg in self.fleet.advance(now):

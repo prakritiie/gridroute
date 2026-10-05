@@ -73,9 +73,9 @@ def test_no_double_booking_16_matcher_processes(r):
           f"handled={sum(s['already_handled'] for s in stats)} unmatched={sum(s['unmatched'] for s in stats)} "
           f"busy workers={sum(s['rides'] > 0 for s in stats)}")
     statuses = [r.hget(f"ride:{x}", "status") for x in rides]
-    assert matched == len(drivers) == statuses.count("assigned")
+    assert matched == len(drivers) == statuses.count("offered")      # M2: matcher offers; accept is the driver's
     assert statuses.count("unmatched") == len(rides) - len(drivers)
-    assert len({r.hget(f"ride:{x}", "driver") for x in rides if r.hget(f"ride:{x}", "status") == "assigned"}) == 150
+    assert len({r.hget(f"ride:{x}", "driver") for x in rides if r.hget(f"ride:{x}", "status") == "offered"}) == 150
     # >= because a ride with two stream entries can have both copies counted in the same round
     assert all(int(r.hget(f"ride:{x}", "attempts")) >= config.MAX_ATTEMPTS
                for x in rides if r.hget(f"ride:{x}", "status") == "unmatched")

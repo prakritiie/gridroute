@@ -36,7 +36,7 @@ def test_matches_nearest_driver_and_publishes_offer(r, s):
     assert m.step() == 1
 
     ride = r.hgetall("ride:r1")
-    assert ride["status"] == "assigned" and ride["driver"] == "near"
+    assert ride["status"] == "offered" and ride["driver"] == "near"
     assert 90 < int(ride["dist_m"]) < 130 and int(ride["eta_pred"]) > 0
     offer = json.loads(sub.get_message(timeout=2)["data"])
     assert offer == {"type": "assignment", "driver_id": "near", "ride_id": "r1", "pickup": list(PICKUP),
@@ -86,12 +86,13 @@ def test_already_assigned_ride_is_republished_not_rematched(r, s):
     assert sum(r.hget(f"driver:{d}", "status") == "assigned" for d in ("d1", "d2")) == 1
 
 
-def test_claim_lease_is_trip_lease(r, s):
+def test_claim_is_a_short_offer_lease(r, s):
     _driver(s, "d1", *PICKUP)
     m = Matcher(r, consumer="t")
     _request(r, "r1")
     m.step()
-    assert config.OFFER_LEASE_MS < r.pttl("lock:driver:d1") <= config.TRIP_LEASE_MS
+    assert 0 < r.pttl("lock:driver:d1") <= config.OFFER_LEASE_MS
+    assert r.zscore("offers", "r1") is not None                     # tracked for the reaper
 
 
 def test_reclaims_rides_from_dead_matcher(r, s):
@@ -102,5 +103,5 @@ def test_reclaims_rides_from_dead_matcher(r, s):
     m = Matcher(r, consumer="alive", claim_idle_ms=0)
     time.sleep(0.01)
     assert m.reclaim() == 1
-    assert r.hget("ride:r1", "status") == "assigned"
+    assert r.hget("ride:r1", "status") == "offered"
     assert r.xpending(RIDES, GROUP)["pending"] == 0

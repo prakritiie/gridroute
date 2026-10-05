@@ -21,6 +21,7 @@ drivers_available = Gauge("drivers_available", "Fresh drivers in the cell index"
 drivers_busy = Gauge("drivers_busy", "Drivers assigned to a ride")
 double_bookings = Gauge("double_bookings", "C1 violations found by the live audit; must be 0")
 drivers_evicted = Counter("drivers_evicted_total", "Silent drivers removed by the reaper")
+offers_expired = Counter("offers_expired_total", "Offers that lapsed without an accept and were re-queued")
 
 # Gateway
 rides_requested = Counter("rides_requested_total", "POST /rides accepted")

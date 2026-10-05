@@ -22,6 +22,8 @@ import redis
 
 from core import config
 
+OPEN = ("offered", "assigned")      # ride states that hold a driver
+
 # Atomic read of everything one driver's invariants depend on.
 # KEYS[1] = driver:{id}, KEYS[2] = lock:driver:{id}, KEYS[3..] = cell keys to test membership in
 # ARGV[1] = driver_id.
@@ -133,7 +135,7 @@ def audit(r: redis.Redis, now_ms: int | None = None, max_age_ms: int = config.MA
     # One driver named by two open rides
     rides_per_driver: dict[str, list[str]] = defaultdict(list)
     for k, h in _scan_hashes(r, "ride:*").items():
-        if h.get("status") == "assigned" and h.get("driver"):
+        if h.get("status") in OPEN and h.get("driver"):
             rides_per_driver[h["driver"]].append(k.split(":", 1)[1])
     double_booked = {d: rides for d, rides in rides_per_driver.items() if len(rides) > 1}
 
@@ -176,7 +178,7 @@ def audit(r: redis.Redis, now_ms: int | None = None, max_age_ms: int = config.MA
 
     for d, rides in double_booked.items():
         out = rides_snap(keys=[f"ride:{x}" for x in rides])
-        still = [x for i, x in enumerate(rides) if out[2 * i] == "assigned" and out[2 * i + 1] == d]
+        still = [x for i, x in enumerate(rides) if out[2 * i] in OPEN and out[2 * i + 1] == d]
         if len(still) > 1:
             errors.append(f"C1 driver {d} double-booked on rides {sorted(still)}")
 

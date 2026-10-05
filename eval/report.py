@@ -39,7 +39,7 @@ def run_metrics(run_dir: Path, warmup_s: float = WARMUP_S) -> dict:
     con.execute(f"CREATE VIEW rides AS SELECT * FROM '{rd}' WHERE req_sim >= {warmup_s} AND req_sim < {window_s}")
     con.execute(f"CREATE VIEW ev AS SELECT * FROM '{ev}'")
     n, unmatched = con.execute(
-        "SELECT count(*), count(*) FILTER (WHERE status NOT IN ('assigned', 'completed')) FROM rides").fetchone()
+        "SELECT count(*), count(*) FILTER (WHERE status IN ('unmatched', 'expired', 'queued')) FROM rides").fetchone()
     pick = con.execute("""
         SELECT avg(leg_s), quantile_cont(leg_s, 0.9), avg(wait_s), avg(match_s), count(*), sum(leg_s) / nullif(sum(osrm_s), 0)
         FROM ev JOIN rides ON ev.ride = rides.ride WHERE ev.type = 'pickup'""").fetchone()
@@ -58,7 +58,7 @@ def run_metrics(run_dir: Path, warmup_s: float = WARMUP_S) -> dict:
                    FROM ev, t0 WHERE type IN ('match', 'complete') GROUP BY slot),
              busy AS (SELECT slot, sum(dv) OVER (ORDER BY slot) AS busy FROM d),
              um AS (SELECT floor(req_sim / 300) AS slot,
-                           avg(CASE WHEN status NOT IN ('assigned', 'completed') THEN 1 ELSE 0 END) AS rate
+                           avg(CASE WHEN status IN ('unmatched', 'expired', 'queued') THEN 1 ELSE 0 END) AS rate
                     FROM rides GROUP BY slot)
         SELECT median({fleet[0] if fleet else 0} - busy.busy) FROM um JOIN busy USING (slot) WHERE um.rate >= 0.10
     """).fetchone()[0]

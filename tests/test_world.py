@@ -76,7 +76,8 @@ def test_trip_lifecycle_roam_pickup_dropoff_done():
     dropoff = (pickup[0] + 0.0018, pickup[1])              # ~200 m further
     assert w.assign("d0", "r1", pickup, dropoff)
     assert w.mode[0] == TO_PICKUP
-    assert w.assign("d0", "r1", pickup, dropoff)           # duplicate offer: idempotent
+    assert not w.assign("d0", "r1", pickup, dropoff)       # duplicate offer: not taken (or accepted) twice
+    assert w.conflicts == 0
     assert not w.assign("d0", "r2", pickup, dropoff) and w.conflicts == 1
 
     done, ticks = [], 0

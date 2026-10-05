@@ -52,14 +52,18 @@ class Matcher:
         r: redis.Redis,
         consumer: str | None = None,
         batch: int = config.MATCH_BATCH,
-        lease_ms: int = config.TRIP_LEASE_MS,
+        lease_ms: int | None = None,
         claim_idle_ms: int = 30_000,
+        offers: bool = config.OFFERS,
     ):
         self.r = r
         self.scripts = Scripts(r)
         self.consumer = consumer or f"matcher-{socket.gethostname()}-{os.getpid()}"
         self.batch = batch
-        self.lease_ms = lease_ms
+        # Offers (M2): a 15 s lease the driver must convert with accept_offer.lua, else the reaper re-queues.
+        # Without offers (M1) the claim covers the whole trip.
+        self.state = "offered" if offers else "assigned"
+        self.lease_ms = lease_ms or (config.OFFER_LEASE_MS if offers else config.TRIP_LEASE_MS)
         self.claim_idle_ms = claim_idle_ms
         self.stats = Stats()
         self.decision_ms: list[float] = []
@@ -110,14 +114,14 @@ class Matcher:
         self.stats.rides += 1
         if ride.get("status") != "queued":
             self.stats.already_handled += 1
-            if ride.get("status") == "assigned":
+            if ride.get("status") in ("offered", "assigned"):
                 self._publish_offer(ride_id, ride)              # idempotent re-publish
             return "handled"
 
         lat, lng = float(ride["lat"]), float(ride["lng"])
         now = int(time.time() * 1000)
         for driver_id, dist_m in candidates(self.r, lat, lng, now=now):
-            res = self.scripts.claim_driver(driver_id, ride_id, now_ms=now, lease_ms=self.lease_ms)
+            res = self.scripts.claim_driver(driver_id, ride_id, now_ms=now, lease_ms=self.lease_ms, state=self.state)
             if res is Claim.CLAIMED:
                 eta_s = round(dist_m * DETOUR / CITY_SPEED_MPS)
                 self.r.hset(ride_key(ride_id), mapping={"eta_pred": eta_s, "dist_m": round(dist_m)})
@@ -133,7 +137,7 @@ class Matcher:
             if res is Claim.RIDE_HANDLED:
                 self.stats.already_handled += 1
                 fresh = self.r.hgetall(ride_key(ride_id))
-                if fresh.get("status") == "assigned":
+                if fresh.get("status") in ("offered", "assigned"):
                     self._publish_offer(ride_id, fresh)
                 return "handled"
             self.stats.conflicts += 1

@@ -95,20 +95,30 @@ class World:
         return sample_points(self.rng, k)
 
     def assign(self, driver_id: str, ride_id: str, pickup, dropoff=None) -> bool:
-        """Driver accepts a ride and heads to the pickup. Repeats of the same assignment are no-ops."""
+        """True if the driver takes this ride now (then the caller sends `accept`). A repeat of an offer it
+        already holds returns False, so it is never accepted twice."""
         i = self.index.get(driver_id)
         if i is None or not self.alive[i]:
             return False
         if self.mode[i] != ROAM:
             if self.ride[i] != ride_id:
                 self.conflicts += 1     # the system offered a busy driver: would be a double-booking
-            return self.ride[i] == ride_id
+            return False
         if dropoff is None:
             dlat, dlng = self.sample_points(1)
             dropoff = (dlat[0], dlng[0])
         self.mode[i], self.ride[i] = TO_PICKUP, ride_id
         self.dest_lat[i], self.dest_lng[i] = pickup
         self.drop_lat[i], self.drop_lng[i] = dropoff
+        return True
+
+    def cancel(self, driver_id: str, ride_id: str) -> bool:
+        """The offer lapsed before the accept landed: drop the ride and roam again."""
+        i = self.index.get(driver_id)
+        if i is None or self.ride[i] != ride_id:
+            return False
+        self.mode[i], self.ride[i] = ROAM, None
+        self.dest_lat[i], self.dest_lng[i] = (v[0] for v in self.sample_points(1))
         return True
 
     def tick(self, dt_s: float = 1.0) -> list[tuple[str, str]]:

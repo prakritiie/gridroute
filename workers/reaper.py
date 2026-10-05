@@ -5,7 +5,8 @@
 Every 5 s, drivers silent for more than MAX_AGE_MS (30 s) leave their cell, so a killed driver is out
 of search within MAX_AGE + interval = 35 s (claim C4). Their driver:{id} hash stays until its 1 h TTL;
 if they come back, the next ping re-indexes them.
-Offer-lease expiry and ride re-queueing join this loop with the offer/accept flow in M2.
+It also re-queues rides whose 15 s offer lapsed without an accept (lost offer, dead app, ignored):
+`offers` is a sorted set scored by lapse time, and expire_offer.lua re-queues each one atomically.
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ class Reaper:
         self.r = r
         self.scripts = Scripts(r)
         self.max_age_ms = max_age_ms
+        self.last_requeued = 0
 
     def step(self, now_ms: int | None = None) -> int:
         now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
@@ -33,7 +35,15 @@ class Reaper:
         cells = list(self.r.smembers("active_cells"))
         evicted = sum(self.scripts.reap_cells(cells[i:i + BATCH], cutoff) for i in range(0, len(cells), BATCH))
         metrics.drivers_evicted.inc(evicted)
+        self.last_requeued = self.expire_offers(now_ms)
         return evicted
+
+    def expire_offers(self, now_ms: int) -> int:
+        """Re-queue rides whose offer lease lapsed. Returns how many were re-queued."""
+        lapsed = self.r.zrangebyscore("offers", "-inf", now_ms, start=0, num=1000)
+        n = sum(self.scripts.expire_offer(ride, now_ms) for ride in lapsed)
+        metrics.offers_expired.inc(n)
+        return n
 
 
 def main() -> None:
@@ -57,6 +67,8 @@ def main() -> None:
         t0 = time.monotonic()
         if n := reaper.step():
             print(f"reaper: evicted {n} silent drivers ({len(reaper.r.smembers('active_cells'))} active cells)")
+        if reaper.last_requeued:
+            print(f"reaper: re-queued {reaper.last_requeued} rides whose offer lapsed")
         time.sleep(max(0.0, a.interval - (time.monotonic() - t0)))
 
 

@@ -4,8 +4,10 @@
 
 WS /ws/driver   up:   {"type":"register","driver_ids":[..]}
                       {"type":"pings","pings":[[d,lat,lng,seq,t_ms], ...]}       batched, ~every tick
+                      {"type":"accept","driver_id":..,"ride_id":..}           within the 15 s offer lease
                       {"type":"trip_done","driver_id":..,"ride_id":..}
                 down: {"type":"assignment","driver_id","ride_id","pickup":[lat,lng],"dropoff"?,"eta_s"}
+                      {"type":"accept_ack","driver_id","ride_id","ok"}       ok=false: the offer lapsed
                       {"type":"trip_done_ack","ride_id","ok"}
 WS /ws/ops      down: {"type":"hexes"|"kpis"|"match","data":...}; on connect the recent matches and the
                       latest kpis and hexes are sent first. Each client has a bounded queue: a slow
@@ -243,6 +245,13 @@ async def driver_socket(ws: WebSocket) -> None:
                           if isinstance(v, (str, int, float)) and not isinstance(v, bool)}
                 if fields.get("type"):
                     await r.xadd(EVENTS, fields, maxlen=1_000_000, approximate=True)
+            elif kind == "accept":
+                d, ride = str(msg.get("driver_id", "")), str(msg.get("ride_id", ""))
+                res = await app.state.scripts.accept_offer(d, ride, now_ms())
+                if res == 1:
+                    await r.xadd(EVENTS, {"type": "accept", "ride": ride, "driver": d, "t": now_ms()},
+                                 maxlen=1_000_000, approximate=True)
+                await ws.send_json({"type": "accept_ack", "ride_id": ride, "driver_id": d, "ok": res == 1})
             elif kind == "trip_done":
                 d, ride = str(msg.get("driver_id", "")), str(msg.get("ride_id", ""))
                 ok = await app.state.scripts.release_driver(d, ride, now_ms())

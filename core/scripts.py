@@ -43,6 +43,8 @@ class Scripts:
         self._release = r.register_script((LUA_DIR / "release_driver.lua").read_text())
         self._reap = r.register_script((LUA_DIR / "reap_cells.lua").read_text())
         self._unmatch = r.register_script((LUA_DIR / "unmatch_ride.lua").read_text())
+        self._accept = r.register_script((LUA_DIR / "accept_offer.lua").read_text())
+        self._expire = r.register_script((LUA_DIR / "expire_offer.lua").read_text())
 
     def move_driver(self, driver_id: str, cell: str, lat: float, lng: float, seq: int, ts_ms: int) -> bool:
         """Apply a ping. False means it was stale/out-of-order and ignored."""
@@ -70,12 +72,26 @@ class Scripts:
         now_ms: int,
         lease_ms: int = config.OFFER_LEASE_MS,
         max_age_ms: int = config.MAX_AGE_MS,
+        state: str = "assigned",
     ) -> Claim:
+        """state='offered' reserves the driver for lease_ms until accept_offer; 'assigned' claims the whole trip."""
         res = self._claim(
             keys=[driver_key(driver_id), lock_key(driver_id), ride_key(ride_id)],
-            args=[driver_id, ride_id, lease_ms, now_ms, max_age_ms],
+            args=[driver_id, ride_id, lease_ms, now_ms, max_age_ms, state],
         )
         return Claim(int(res))
+
+    def accept_offer(self, driver_id: str, ride_id: str, now_ms: int,
+                     trip_lease_ms: int = config.TRIP_LEASE_MS) -> int:
+        """1 accepted, 0 offer lapsed / not this driver's, -1 ride no longer offered."""
+        return int(self._accept(
+            keys=[driver_key(driver_id), lock_key(driver_id), ride_key(ride_id)],
+            args=[driver_id, ride_id, trip_lease_ms, now_ms],
+        ))
+
+    def expire_offer(self, ride_id: str, now_ms: int) -> bool:
+        """Re-queue a ride whose offer lapsed. False if the lease still runs or the ride moved on."""
+        return self._expire(keys=[ride_key(ride_id)], args=[ride_id, now_ms]) == 1
 
     def release_driver(self, driver_id: str, ride_id: str, now_ms: int) -> bool:
         """False means ride_id does not own this driver's lock (wrong or expired ride)."""
@@ -100,6 +116,14 @@ class AsyncScripts:
 
     def __init__(self, r):
         self._release = r.register_script((LUA_DIR / "release_driver.lua").read_text())
+        self._accept = r.register_script((LUA_DIR / "accept_offer.lua").read_text())
+
+    async def accept_offer(self, driver_id: str, ride_id: str, now_ms: int,
+                           trip_lease_ms: int = config.TRIP_LEASE_MS) -> int:
+        return int(await self._accept(
+            keys=[driver_key(driver_id), lock_key(driver_id), ride_key(ride_id)],
+            args=[driver_id, ride_id, trip_lease_ms, now_ms],
+        ))
 
     async def release_driver(self, driver_id: str, ride_id: str, now_ms: int) -> bool:
         res = await self._release(

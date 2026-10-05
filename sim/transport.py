@@ -45,6 +45,12 @@ class StreamTransport:
     def trip_done(self, driver_id: str, ride_id: str) -> None:
         pass
 
+    def accept(self, driver_id: str, ride_id: str) -> None:
+        pass
+
+    def drain_rejected(self) -> list[tuple[str, str]]:
+        return []
+
 
 class WebSocketTransport:
     """Gateway connection that heals itself.
@@ -59,6 +65,7 @@ class WebSocketTransport:
         self.ids = [str(d) for d in driver_ids]
         self.ws = None
         self.inbox: list[dict] = []
+        self.rejected: list[tuple[str, str]] = []      # accepts that came back ok=false: the offer had lapsed
         self.pending_done: list[tuple[str, str]] = []
         self.release_failures = 0
         self.dropped_pings = 0
@@ -119,6 +126,8 @@ class WebSocketTransport:
                     self.inbox.append(msg)
                 elif msg.get("type") == "trip_done_ack" and not msg.get("ok"):
                     self.release_failures += 1
+                elif msg.get("type") == "accept_ack" and not msg.get("ok"):
+                    self.rejected.append((msg.get("driver_id", ""), msg.get("ride_id", "")))
         except ConnectionClosed:
             pass
         if ws is self.ws:
@@ -141,6 +150,18 @@ class WebSocketTransport:
     def drain(self) -> list[dict]:
         msgs, self.inbox = self.inbox, []
         return msgs
+
+    async def accept(self, driver_id: str, ride_id: str) -> None:
+        """Take an offer. If the socket is down the offer simply lapses and the ride is re-queued."""
+        if self.up:
+            try:
+                await self.ws.send(json.dumps({"type": "accept", "driver_id": driver_id, "ride_id": ride_id}))
+            except ConnectionClosed:
+                self._lost()
+
+    def drain_rejected(self) -> list[tuple[str, str]]:
+        out, self.rejected = self.rejected, []
+        return out
 
     async def trip_done(self, driver_id: str, ride_id: str) -> None:
         if not self.up:

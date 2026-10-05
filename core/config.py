@@ -25,6 +25,7 @@ RES_DEMAND = 7
 # Freshness and leases (ms)
 MAX_AGE_MS = _int("MAX_AGE_MS", 30_000)            # silent longer than this = not matchable
 OFFER_LEASE_MS = _int("OFFER_LEASE_MS", 15_000)
+OFFERS = bool(_int("OFFERS", 1))   # M2: matcher offers, driver must accept within OFFER_LEASE_MS
 # Spec says 15 min, but a trip longer than its lease would be revived mid-ride by move_driver.
 # M1 claims with this directly (no accept step yet), so it must exceed any simulated pickup + trip.
 TRIP_LEASE_MS = _int("TRIP_LEASE_MS", 60 * 60_000)

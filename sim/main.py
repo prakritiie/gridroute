@@ -52,7 +52,11 @@ async def run(a: argparse.Namespace) -> None:
             killed = True
 
         for msg in tx.drain():
-            assigned += world.assign(msg["driver_id"], msg["ride_id"], msg["pickup"], msg.get("dropoff"))
+            if world.assign(msg["driver_id"], msg["ride_id"], msg["pickup"], msg.get("dropoff")):
+                assigned += 1
+                await _maybe(tx.accept(msg["driver_id"], msg["ride_id"]))
+        for driver_id, ride_id in tx.drain_rejected():
+            world.cancel(driver_id, ride_id)
         for driver_id, ride_id in world.tick(1.0 * a.speedup):
             await _maybe(tx.trip_done(driver_id, ride_id))
             completed += 1
