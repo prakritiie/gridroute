@@ -39,3 +39,26 @@ export interface Match {
 }
 
 export type Link = "connecting" | "live" | "reconnecting";
+
+export interface ExplainCandidate {
+  driver: string;
+  dist_m: number;
+  cost: number;
+  osrm_s?: number | null;
+  osrm_m?: number | null;
+  model_s?: number;
+}
+
+/** GET /rides/{id}/explain — written by the matcher for every match (workers/matcher.py). */
+export interface Explain {
+  ride: string;
+  policy: string;
+  t: number;
+  chosen: string;
+  cost_unit: "s" | "m";
+  model: string | null;
+  fallback: boolean;
+  sim_time?: string;
+  pickup: [number, number];
+  candidates: ExplainCandidate[];
+}

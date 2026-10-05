@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle, CheckCircle2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { Sparkline } from "./Sparkline";
 import { ago, dur, num, pct } from "@/lib/format";
@@ -163,10 +163,11 @@ function HexDetails({ cell, cells, layer, res, onPick, onClose }: {
 /* ─────────────────────────────── sidebar ─────────────────────────────── */
 export function Sidebar(props: {
   kpis: Kpis | null; history: Kpis[]; cell: Cell | null; cells: Cell[]; layer: Layer; res: Resolution;
-  onPick: (c: Cell) => void; onClose: () => void;
+  onPick: (c: Cell) => void; onClose: () => void; top?: ReactNode;
 }) {
   return (
     <aside className="sidebar" aria-label="Metrics">
+      {props.top}
       <Overview kpis={props.kpis} history={props.history} />
       <Integrity kpis={props.kpis} />
       <HexDetails cell={props.cell} cells={props.cells} layer={props.layer} res={props.res}

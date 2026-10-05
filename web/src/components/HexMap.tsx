@@ -36,9 +36,10 @@ interface Props {
   selected: string | null;
   onSelect: (cell: Cell | null) => void;
   onHover: (h: HoverInfo | null) => void;
+  focus?: [number, number] | null;
 }
 
-export default function HexMap({ cells, layer, max, matches, selected, onSelect, onHover }: Props) {
+export default function HexMap({ cells, layer, max, matches, selected, onSelect, onHover, focus }: Props) {
   const [beforeId, setBeforeId] = useState<string | undefined>();
   const [now, setNow] = useState(() => Date.now());
 
@@ -98,6 +99,18 @@ export default function HexMap({ cells, layer, max, matches, selected, onSelect,
         getLineWidth: 2,
         ...under,
       }),
+      new ScatterplotLayer<[number, number]>({
+        id: "focus",                       // the pickup of the match being explained
+        data: focus ? [focus] : [],
+        getPosition: (p) => [p[1], p[0]],
+        stroked: true,
+        filled: false,
+        radiusUnits: "pixels",
+        lineWidthUnits: "pixels",
+        getRadius: 11,
+        getLineWidth: 2.5,
+        getLineColor: [255, 255, 255, 255],
+      }),
       new ScatterplotLayer<Match>({
         id: "pulses",
         data: matches.filter((m) => now - m.at < PULSE_MS),
@@ -113,7 +126,7 @@ export default function HexMap({ cells, layer, max, matches, selected, onSelect,
         updateTriggers: { getRadius: now, getFillColor: now, getLineColor: now },
       }),
     ];
-  }, [visible, layer, max, matches, now, selected, beforeId]);
+  }, [visible, layer, max, matches, now, selected, beforeId, focus]);
 
   return (
     <Map

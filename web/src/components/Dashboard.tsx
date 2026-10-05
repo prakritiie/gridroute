@@ -1,17 +1,18 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { HoverInfo } from "./HexMap";
+import { ExplainPanel } from "./ExplainPanel";
 import { Legend, Offline } from "./MapOverlays";
 import { MatchFeed } from "./MatchFeed";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { num } from "@/lib/format";
 import { domainMax, imbalance, type Layer } from "@/lib/palette";
-import type { Cell, Resolution } from "@/lib/types";
-import { GATEWAY_WS, useOps } from "@/lib/useOps";
+import type { Cell, Explain, Resolution } from "@/lib/types";
+import { GATEWAY_HTTP, GATEWAY_WS, useOps } from "@/lib/useOps";
 
 // deck.gl + MapLibre need the browser (WebGL), so the map never renders on the server
 const HexMap = dynamic(() => import("./HexMap"), { ssr: false, loading: () => <div className="map-loading" /> });
@@ -22,6 +23,20 @@ export default function Dashboard() {
   const [res, setRes] = useState<Resolution>(9);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hover, setHover] = useState<HoverInfo | null>(null);
+  const [explainId, setExplainId] = useState<string | null>(null);
+  const [explain, setExplain] = useState<{ id: string; data: Explain | null; error: string | null } | null>(null);
+
+  useEffect(() => {
+    if (!explainId) return;
+    let alive = true;
+    fetch(`${GATEWAY_HTTP}/rides/${explainId}/explain`)
+      .then(async (r) => (r.ok ? r.json() : Promise.reject(r.status === 404
+        ? "No explanation stored for this ride (older than an hour?)." : `Gateway error ${r.status}.`)))
+      .then((data: Explain) => alive && setExplain({ id: explainId, data, error: null }))
+      .catch((e) => alive && setExplain({ id: explainId, data: null, error: typeof e === "string" ? e : "Gateway unreachable." }));
+    return () => { alive = false; };
+  }, [explainId]);
+  const shown = explain && explain.id === explainId ? explain : null;
 
   const cells: Cell[] = useMemo(() => ops.hexes?.res[String(res) as "9" | "8" | "7"] ?? [], [ops.hexes, res]);
   const selected = selectedId ? cells.find((c) => c[0] === selectedId) ?? [selectedId, 0, 0] as Cell : null;
@@ -48,7 +63,9 @@ export default function Dashboard() {
       <TopBar link={ops.link} t={ops.hexes?.t ?? null} layer={layer} onLayer={setLayer} res={res} onRes={changeRes} />
 
       <Sidebar kpis={ops.kpis} history={ops.history} cell={selected} cells={cells} layer={layer} res={res}
-        onPick={(c) => setSelectedId(c[0])} onClose={() => setSelectedId(null)} />
+        onPick={(c) => setSelectedId(c[0])} onClose={() => setSelectedId(null)}
+        top={explainId ? <ExplainPanel explain={shown?.data ?? null} error={shown?.error ?? null}
+          onClose={() => setExplainId(null)} /> : null} />
 
       <main className="map" aria-label="Live map">
         <HexMap
@@ -59,6 +76,7 @@ export default function Dashboard() {
           selected={selectedId}
           onSelect={(c) => setSelectedId(c?.[0] ?? null)}
           onHover={setHover}
+          focus={shown?.data?.pickup ?? null}
         />
         {hover && hovered && (
           <div className="tooltip" style={{ left: hover.x, top: hover.y }}>
@@ -73,7 +91,7 @@ export default function Dashboard() {
         {ops.link !== "live" && !ops.hexes && <Offline url={GATEWAY_WS} />}
       </main>
 
-      <MatchFeed matches={ops.matches} kpis={ops.kpis} />
+      <MatchFeed matches={ops.matches} kpis={ops.kpis} selected={explainId} onSelect={setExplainId} />
     </div>
   );
 }

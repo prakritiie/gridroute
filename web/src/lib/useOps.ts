@@ -71,3 +71,6 @@ export function useOps(url: string = GATEWAY_WS): OpsState {
 
   return state;
 }
+
+/** REST base of the same gateway (ws://host:8000/ws/ops -> http://host:8000). */
+export const GATEWAY_HTTP = GATEWAY_WS.replace(/^ws/, "http").replace(/\/ws\/ops$/, "");

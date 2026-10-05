@@ -49,6 +49,10 @@ pickup's res-8 hex and hour of week (all fitted on Jan–Apr only).
 ## Known limits
 
 - Taxi trips are passenger trips, not empty pickup legs; the < 3 km slice is the closest proxy for pickup drives.
+- Cleaning removed trips under 300 m or 60 s (meter errors), so the model has never seen very short legs and
+  predicts at least ~2 min even for a 10 s pickup drive. In the R3 replay its online pickup-estimate error was
+  1:22 (vs 2:41 for the distance heuristic). Next version: train on pickup-like legs, or use OSRM x congestion
+  below ~300 m.
 - 2016 traffic, yellow cabs only, Manhattan-heavy (see the data card); outer-borough and airport slices have
   fewer trips and wider error.
 - Trained against OSRM's free-flow estimate: if OSRM's road graph changes, retrain.

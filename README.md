@@ -48,18 +48,33 @@ never saw. Features come from one shared function used by training and the match
 RMSLE 0.301 (B3 0.416, raw OSRM 0.797). The model beats every baseline on every slice: distance, borough,
 airports and time of day.
 
-## Results so far
+## Results: does better prediction make better dispatch? (C7)
 
-Real June 2016 demand replayed through the live system (Tue 7 Jun, 07:00–09:00, 20% of real requests,
-1,600 drivers, 3 seeds). Pickup time is the simulated *true* drive time: OSRM road time × June congestion,
-which the ETA model never trains on. Full protocol and per-run detail: [docs/results.md](docs/results.md).
+Real June 2016 demand replayed through the live system (Tue 7 Jun, 07:00–09:00, 20% of real requests, 1,600
+drivers, 3 seeds per row). Pickup time is the simulated *true* drive time: OSRM road time × June congestion,
+which the ETA model never trains on. Each row changes one thing. Full protocol and per-run detail:
+[docs/results.md](docs/results.md).
 
-| Row | Policy | Pickup mean | Pickup p90 | Unmatched % | Empty km / driver-h | Decision p99 |
-|---|---|---|---|---|---|---|
-| R0 | Greedy, straight-line distance | 4:53 ± 0:04 | 8:09 ± 0:03 | 12.89 ± 0.44 | 1.81 ± 0.01 | 210 ± 33 ms |
+| Row | Matching | Cost | Pickup mean | Pickup p90 | Unmatched % | Empty km / driver-h | Decision p99 | Pickup-estimate error |
+|---|---|---|---|---|---|---|---|---|
+| R0 | Greedy | Straight-line distance | 4:49 ± 0:07 | 8:02 ± 0:06 | 13.98 ± 1.50 | 1.77 ± 0.03 | 345 ms | n/a |
+| R1 | Greedy | ETA model | 4:45 ± 0:05 | 8:06 ± 0:07 | 12.67 ± 0.94 | 1.75 ± 0.03 | 219 ms | 1:24 |
+| R2 | Batch (Hungarian) | Straight-line distance | 4:25 ± 0:02 | 7:43 ± 0:04 | 14.12 ± 0.04 | 1.62 ± 0.02 | 102 ms | 2:41 |
+| **R3** | **Batch** | **ETA model** | **4:19 ± 0:06** | 7:47 ± 0:05 | 13.45 ± 0.73 | **1.59 ± 0.06** | 171 ms | **1:22** |
 
-The baseline's main failure is spatial, not capacity: in the 5-minute slots where 10% or more of riders gave
-up, a median of ~570 of 1,600 drivers were idle, waiting where their last trip ended, more than a 3-ring
-search (~1 km) away. Rows R1–R4 (learned ETAs, batch assignment, repositioning) are measured against this.
+What this says, honestly:
+
+- **Batching is the big win.** Assigning each 2-second batch jointly (Hungarian) instead of first-come-first-served
+  cuts mean pickup by 24–30 s (8–10%) and empty km by 9–10%, well outside the seed spread.
+- **The learned ETA helps most inside a batch.** R3 is the best row on pickup time and empty km; greedy + ETA (R1)
+  is within noise of R0, because with ~5 nearby candidates distance and drive time usually agree on the winner.
+  Where they disagree it matters: the dashboard's *Why this driver* panel shows drivers 46 m away by straight
+  line but 2 minutes away by Manhattan's one-way streets.
+- **The ETA halves the pickup-estimate error** the rider is shown (1:22 vs 2:41 for the distance heuristic),
+  even where it doesn't change the driver.
+- **No matching policy fixes unmatched riders** (13–14% in every row). The failure is spatial: idle drivers wait
+  where their last trip ended. That is what row R4 (demand forecasting + repositioning) is for.
+- **Known limit:** the model was trained on cleaned taxi trips, which exclude legs under 300 m / 60 s, so it
+  predicts at least ~2 min even for a 10-second pickup leg. Training on pickup-like legs is the next model.
 
 Map data © OpenStreetMap contributors, basemap © CARTO.

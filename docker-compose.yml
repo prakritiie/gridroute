@@ -39,6 +39,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       METRICS_PORT: "9100"
       OSRM_URL: http://osrm:5000
+      MATCH_POLICY: ${MATCH_POLICY:-batch-eta}   # live demo runs the best measured policy (R3); replays set their own
     volumes:
       - ./models:/app/models:ro      # model registry (models/eta/vN); the Redis pointer picks the version
 
