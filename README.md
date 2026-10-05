@@ -33,6 +33,21 @@ M1 (core engine) is nearly complete. These claims are tested in CI and hold in l
 | C4 The system heals itself | Silent drivers leave search in ≤ 30 s and the index in ≤ 35 s; the simulator survives gateway restarts |
 | C5 The core is fast, measured fairly | [Benchmarks](docs/benchmarks.md) vs Redis GEO and PostGIS on real positions, 1k → 100k drivers. H3 is the fastest writer (24–38k position updates/s) and beats Redis GEO lookups at 100k (4.6 ms p50); PostGIS's KNN index wins pure lookup at high density (1.0 ms), and one Redis caps near 200 lookups/s at Manhattan density. The benchmark drove a best-first rewrite of the search (4.6× faster at 100k). |
 
+## Learned ETA (M3)
+
+LightGBM on `log1p(duration)`, trained on 1.2M Jan–Apr 2016 trips **on the GPU** (LightGBM's CUDA learner, built in
+[ml/Dockerfile.gpu](ml/Dockerfile.gpu); RTX 3050, 13 min), early-stopped on May, tested on 300k June trips it
+never saw. Features come from one shared function used by training and the matcher alike
+([core/features.py](core/features.py)), with a parity test. Full card: [docs/model_card_eta.md](docs/model_card_eta.md).
+
+| Mean absolute error (June) | B1 straight-line | B2 raw OSRM | B3 hex-hour speed | **Model** |
+|---|---|---|---|---|
+| All trips | 6.69 min | 7.37 min | 5.08 min | **3.08 min (−39% vs B3)** |
+| < 3 km (pickup-like) | 3.61 min | 5.39 min | 2.94 min | **2.27 min (−23%)** |
+
+RMSLE 0.301 (B3 0.416, raw OSRM 0.797). The model beats every baseline on every slice: distance, borough,
+airports and time of day.
+
 ## Results so far
 
 Real June 2016 demand replayed through the live system (Tue 7 Jun, 07:00–09:00, 20% of real requests,

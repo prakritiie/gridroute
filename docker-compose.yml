@@ -142,6 +142,28 @@ services:
     environment:
       BASE: http://bench-api:8100
 
+  # ---- ML training on the GPU (profile "ml"): LightGBM built with CUDA ---------
+  #   docker compose --profile ml run --rm train python3 -m ml.eta_train
+  train:
+    profiles: ["ml"]
+    build:
+      context: ml
+      dockerfile: Dockerfile.gpu
+    image: gridroute-train-gpu
+    volumes:
+      - .:/app
+      - ${GRIDROUTE_DATA_DIR:-./data}:/data
+    environment:
+      GRIDROUTE_DATA_DIR: /data
+      PYTHONPATH: /app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   # ---- OSRM (profile "osrm") ----------------------------------------------
   # Data lives in a named volume, not the repo folder: the processed graph is several GB.
   osrm-download:

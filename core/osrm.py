@@ -29,21 +29,23 @@ def _coord(lat: float, lng: float) -> str:
     return f"{lng:.6f},{lat:.6f}"
 
 
-async def pair_durations(
+async def pair_routes(
     pairs: list[tuple[float, float, float, float]],
     base_url: str = config.OSRM_URL,
     batch: int = TABLE_BATCH,
     concurrency: int = 8,
-) -> list[float | None]:
-    """Free-flow seconds for each (from_lat, from_lng, to_lat, to_lng); None where OSRM finds no route."""
+) -> list[tuple[float, float] | None]:
+    """Free-flow (seconds, metres) for each (from_lat, from_lng, to_lat, to_lng); None where OSRM finds no route."""
     sem = asyncio.Semaphore(concurrency)
-    out: list[float | None] = [None] * len(pairs)
+    out: list[tuple[float, float] | None] = [None] * len(pairs)
     async with httpx.AsyncClient(base_url=base_url, timeout=60) as client:
         async def run(start: int) -> None:
             chunk = pairs[start:start + batch]
             k = len(chunk)
             coords = ";".join(_coord(p[0], p[1]) for p in chunk) + ";" + ";".join(_coord(p[2], p[3]) for p in chunk)
-            params = {"sources": ";".join(map(str, range(k))), "destinations": ";".join(map(str, range(k, 2 * k)))}
+            params = {"sources": ";".join(map(str, range(k))), "destinations": ";".join(map(str, range(k, 2 * k))),
+                      "annotations": "duration,distance"}
+            j = None
             async with sem:
                 for attempt in range(3):
                     try:
@@ -53,14 +55,19 @@ async def pair_durations(
                         if attempt == 2:
                             return
                         await asyncio.sleep(0.5 * (attempt + 1))
-            if j.get("code") != "Ok":
+            if not j or j.get("code") != "Ok":
                 return
             for i in range(k):
-                d = j["durations"][i][i]
-                out[start + i] = float(d) if d is not None else None
+                d, m = j["durations"][i][i], j["distances"][i][i]
+                out[start + i] = (float(d), float(m)) if d is not None and m is not None else None
 
         await asyncio.gather(*(run(s) for s in range(0, len(pairs), batch)))
     return out
+
+
+async def pair_durations(pairs, base_url: str = config.OSRM_URL, **kw) -> list[float | None]:
+    """Free-flow seconds only (see pair_routes)."""
+    return [None if r is None else r[0] for r in await pair_routes(pairs, base_url, **kw)]
 
 
 def _hav_m(a: tuple[float, float], b: tuple[float, float]) -> float:

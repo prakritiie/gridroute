@@ -5,7 +5,7 @@ INGEST ?= 2
 MATCHERS ?= 2
 RIDE_RATE ?= 5
 
-.PHONY: install up down stack osrm gateway sim riders ingest matcher reaper aggregator web data clean congestion replay report bench test audit
+.PHONY: install up down stack osrm gateway sim riders ingest matcher reaper aggregator web data clean congestion replay report features train evaluate bench test audit
 
 install:
 	$(PY) -m pip install -e ".[dev]"
@@ -64,6 +64,15 @@ replay:        ## R0 protocol: Tue 7 Jun 2016 07-09, 20% demand, 1,600 drivers, 
 
 report:        ## results table from every recorded run -> docs/results.md
 	$(PY) -m eval.report --write docs/results.md
+
+features:      ## OSRM time + distance for the fixed train/validate/test samples (~30-45 min, needs OSRM)
+	$(PY) -m ml.precompute
+
+train:         ## ETA model on the GPU (CUDA LightGBM in ml/Dockerfile.gpu); falls back to CPU if no GPU
+	docker compose --profile ml run --rm train python3 -m ml.eta_train
+
+evaluate:      ## June metrics vs B1-B3 by slice -> models/eta/vN/{metrics.json,card.md}, docs/model_card_eta.md
+	$(PY) -m ml.evaluate
 
 bench:         ## H3 vs Redis GEO vs PostGIS at 1k-100k drivers -> docs/benchmarks.md (needs the trip data)
 	docker compose --profile bench up -d --build postgis bench-api

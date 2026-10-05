@@ -1,0 +1,20 @@
+# GPU training image: LightGBM compiled with its CUDA tree learner (the PyPI wheel ships CPU-only).
+#   docker compose --profile ml build train
+#   docker compose --profile ml run --rm train python -m ml.eta_train
+# Needs an NVIDIA GPU visible to Docker (WSL2 backend on Windows, nvidia-container-toolkit on Linux).
+FROM nvidia/cuda:12.6.3-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1 PIP_BREAK_SYSTEM_PACKAGES=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-dev cmake build-essential git \
+    && rm -rf /var/lib/apt/lists/*
+
+# CUDA tree learner (-DUSE_CUDA=ON); sm_86 = RTX 30-series (Ampere). Add arches here for other GPUs.
+RUN pip install --no-binary lightgbm \
+        --config-settings=cmake.define.USE_CUDA=ON \
+        --config-settings=cmake.define.CMAKE_CUDA_ARCHITECTURES=86 \
+        "lightgbm>=4.5"
+RUN pip install "numpy>=1.26" "duckdb>=1.1" "h3>=4.1" "holidays>=0.50" "redis>=5.0"
+
+WORKDIR /app
+CMD ["python3", "-m", "ml.device"]

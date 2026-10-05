@@ -12,6 +12,8 @@ dependencies = [
     "websockets>=13",
     "httpx>=0.27",
     "prometheus-client>=0.20",
+    "holidays>=0.50",
+    "lightgbm>=4.5",            # in-process ETA model in the matcher (CPU inference; GPU training is ml/Dockerfile.gpu)
 ]
 
 [project.optional-dependencies]
