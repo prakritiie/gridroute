@@ -61,6 +61,7 @@ def test_reports_every_real_violation(r, t, recheck):
     r.hset("ride:r6", mapping={"status": "assigned", "driver": "dbl"})
 
     r.zadd(f"cell:{CELL_B}", {"ghost": t})                        # C2: cell entry with no driver hash
+    r.sadd("rides:open", "r1", "r2", "r4", "r5", "r6")            # as claim_driver.lua would have indexed them
 
     errors = "\n".join(audit(r, recheck=recheck))
     for needle in [
@@ -73,3 +74,52 @@ def test_reports_every_real_violation(r, t, recheck):
         "unknown driver ghost",
     ]:
         assert needle in errors, f"missing: {needle}\n{errors}"
+
+
+def test_open_ride_index_follows_every_transition(r, s, t):
+    """rides:open is maintained by the Lua scripts in the same step as each status change."""
+    import time as _t
+    from workers.reaper import Reaper
+    s.move_driver("d1", CELL_A, 40.75, -73.98, seq=1, ts_ms=t)
+    queue_ride(r, "r1")
+    s.claim_driver("d1", "r1", now_ms=t, state="offered")
+    assert r.sismember("rides:open", "r1")                         # offered: open
+    s.accept_offer("d1", "r1", now_ms())
+    assert r.sismember("rides:open", "r1")                         # assigned: still open
+    s.release_driver("d1", "r1", now_ms())
+    assert not r.sismember("rides:open", "r1")                     # completed: closed
+
+    queue_ride(r, "r2")
+    s.claim_driver("d1", "r2", now_ms=now_ms(), lease_ms=50, state="offered")
+    _t.sleep(0.15)
+    Reaper(r).expire_offers(now_ms())
+    assert not r.sismember("rides:open", "r2")                     # lapsed offer re-queued: closed
+
+    queue_ride(r, "r3")
+    s.claim_driver("d1", "r3", now_ms=now_ms(), lease_ms=50)       # whole-trip claim, lease runs out
+    _t.sleep(0.15)
+    s.move_driver("d1", CELL_A, 40.75, -73.98, seq=2, ts_ms=now_ms())
+    assert r.hget("ride:r3", "status") == "expired" and not r.sismember("rides:open", "r3")
+    from tools.audit import audit
+    assert audit(r) == []
+
+
+def test_audit_reports_index_drift(r, t):
+    from tools.audit import audit
+    r.hset("ride:old", mapping={"status": "completed", "driver": "d9"})
+    r.sadd("rides:open", "old")
+    assert any("rides:open lists ride old" in v for v in audit(r))
+
+
+def test_audit_cost_does_not_grow_with_finished_rides(r, s, t):
+    """Regression: the audit scanned every ride kept for 24 h (~7 s at 58k). Finished rides must cost nothing."""
+    import time as _t
+    from tools.audit import audit
+    pipe = r.pipeline(transaction=False)
+    for i in range(40_000):
+        pipe.hset(f"ride:done{i}", mapping={"status": "completed", "driver": f"d{i % 50}"})
+    pipe.execute()
+    s.move_driver("d1", CELL_A, 40.75, -73.98, seq=1, ts_ms=t)
+    t0 = _t.perf_counter()
+    assert audit(r) == []
+    assert _t.perf_counter() - t0 < 1.0

@@ -132,17 +132,36 @@ def audit(r: redis.Redis, now_ms: int | None = None, max_age_ms: int = config.MA
         drivers_per_ride[drivers[d]["ride"]].append(d)
     shared_rides = {ride: ds for ride, ds in drivers_per_ride.items() if len(ds) > 1}
 
-    # One driver named by two open rides
+    # One driver named by two open rides. Only rides in the `rides:open` index (kept by the Lua scripts in
+    # the same step as every status change) can hold a driver, so the audit's cost tracks rides in progress,
+    # not the 24 h of finished rides kept for lookups (a full scan reached ~7 s at 58k rides).
     rides_per_driver: dict[str, list[str]] = defaultdict(list)
-    for k, h in _scan_hashes(r, "ride:*").items():
-        if h.get("status") in OPEN and h.get("driver"):
-            rides_per_driver[h["driver"]].append(k.split(":", 1)[1])
+    index_drift: list[str] = []
+    open_ids = list(r.smembers("rides:open"))
+    pipe = r.pipeline(transaction=False)
+    for rid in open_ids:
+        pipe.hmget(f"ride:{rid}", "status", "driver")
+    for rid, (status, driver) in zip(open_ids, pipe.execute()):
+        if status is None:
+            continue                                  # hash expired (24 h TTL) with the member still listed
+        if status not in OPEN:
+            index_drift.append(rid)
+        elif driver:
+            rides_per_driver[driver].append(rid)
     double_booked = {d: rides for d, rides in rides_per_driver.items() if len(rides) > 1}
 
     orphans = {d: membership[d] for d in membership.keys() - drivers.keys()}
 
+    if recheck and index_drift:
+        statuses = r.pipeline(transaction=False)
+        for rid in index_drift:
+            statuses.hget(f"ride:{rid}", "status")
+        index_drift = [rid for rid, st in zip(index_drift, statuses.execute())
+                       if st not in OPEN and r.sismember("rides:open", rid)]
+    drift_errors = [f"C1 rides:open lists ride {rid} whose status is not open" for rid in index_drift]
+
     if not recheck:
-        errors = [e for errs in flagged.values() for e in errs]
+        errors = [e for errs in flagged.values() for e in errs] + drift_errors
         errors += [f"C1 ride {ride} booked to {len(ds)} drivers: {sorted(ds)}" for ride, ds in shared_rides.items()]
         errors += [f"C1 driver {d} double-booked on rides {sorted(x)}" for d, x in double_booked.items()]
         errors += [f"C2 cell entry for unknown driver {d} in {c}" for d, c in orphans.items()]
@@ -151,7 +170,7 @@ def audit(r: redis.Redis, now_ms: int | None = None, max_age_ms: int = config.MA
     # ---- pass 2: atomic recheck of everything flagged --------------------------
     snap = r.register_script(SNAPSHOT_LUA)
     rides_snap = r.register_script(RIDES_LUA)
-    errors: list[str] = []
+    errors: list[str] = list(drift_errors)
 
     for d in set(flagged) | {d for ds in shared_rides.values() for d in ds} | set(orphans):
         h = drivers.get(d, {})

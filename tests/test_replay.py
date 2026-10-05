@@ -153,3 +153,24 @@ def test_recorder_handles_a_full_run_quickly(r, tmp_path):
     out = record(r, "big", "0-0", "+", {}, {"policy": "x", "window_s": "1"}, tmp_path)
     assert _time.perf_counter() - t < 10
     assert duckdb.connect().execute(f"SELECT count(*) FROM '{(out / 'events.parquet').as_posix()}'").fetchone()[0] == 30_000
+
+
+def test_cruise_counts_as_empty_and_an_offer_interrupts_it():
+    f = Fleet.at([(40.75, -73.98)], seq_base=1)
+    assert f.start_cruise("rd0", Leg("cruise", "", _route(600), 0.0, 60.0))
+    assert f.drivers["rd0"].mode == IDLE                       # cruising is still idle: matchable
+    assert f.accept("rd0", "r1") and f.drivers["rd0"].leg is None   # the offer interrupts the cruise
+    assert not f.start_cruise("rd0", Leg("cruise", "", _route(600), 0.0, 60.0))   # busy: no new cruise
+
+    g = Fleet.at([(40.75, -73.98)], seq_base=1)
+    g.start_cruise("rd0", Leg("cruise", "", _route(900), 0.0, 60.0))
+    [(kind, d, _)] = g.advance(60.0)
+    assert kind == "cruise" and d.mode == IDLE and d.empty_m == 900 and d.leg is None
+
+
+def test_demo_points_are_real_nyc_locations():
+    from sim import points
+    from core.config import LAT_MAX, LAT_MIN, LNG_MAX, LNG_MIN
+    pts = points.load()
+    assert len(pts) == 40_000
+    assert ((pts[:, 0] >= LAT_MIN) & (pts[:, 0] <= LAT_MAX) & (pts[:, 1] >= LNG_MIN) & (pts[:, 1] <= LNG_MAX)).all()

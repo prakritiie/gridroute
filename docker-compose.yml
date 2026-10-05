@@ -2,7 +2,6 @@
 #   docker compose up -d redis                       # just Redis (tests, local dev)
 #   docker compose up -d --build --scale ingest=2 --scale matcher=2
 #                                                    # full M1 loop: gateway :8000, workers, 5k drivers, riders
-#   docker compose --profile osrm up -d osrm         # M2: one-time download + preprocess (~15-30 min), serve on :5001
 # Prometheus :9090 and Grafana :3001 (dashboard "GridRoute · Dispatch") come up with the stack.
 
 x-app: &app
@@ -47,13 +46,16 @@ services:
 
   sim:
     <<: *app
-    command: ["python", "-m", "sim.main", "--drivers", "${SIM_DRIVERS:-5000}"]
+    command: ["python", "-m", "sim.live", "--drivers", "${SIM_DRIVERS:-5000}"]
     environment:
       REDIS_URL: redis://redis:6379/0
       GATEWAY_WS: ws://gateway:8000/ws/driver
+      OSRM_URL: http://osrm:5000
     depends_on:
       gateway:
         condition: service_healthy
+      osrm:
+        condition: service_started
 
   riders:
     <<: *app
@@ -164,10 +166,10 @@ services:
               count: all
               capabilities: [gpu]
 
-  # ---- OSRM (profile "osrm") ----------------------------------------------
+  # ---- OSRM: road routing for the simulator, replay, features and (M3) the matcher ----
+  # First start downloads the NYC extract and builds the graph once (~1-2 min), then serves on :5001.
   # Data lives in a named volume, not the repo folder: the processed graph is several GB.
   osrm-download:
-    profiles: ["osrm"]
     image: curlimages/curl:8.10.1
     user: root
     volumes:
@@ -185,7 +187,6 @@ services:
       OSRM_PBF_URL: ${OSRM_PBF_URL:-https://download.bbbike.org/osm/bbbike/NewYork/NewYork.osm.pbf}
 
   osrm-prep:
-    profiles: ["osrm"]
     image: ghcr.io/project-osrm/osrm-backend:v5.27.1
     volumes:
       - osrm-data:/data
@@ -202,7 +203,6 @@ services:
         condition: service_completed_successfully
 
   osrm:
-    profiles: ["osrm"]
     image: ghcr.io/project-osrm/osrm-backend:v5.27.1
     command: ["osrm-routed", "--algorithm", "mld", "--max-table-size", "10000", "/data/region.osrm"]
     ports:

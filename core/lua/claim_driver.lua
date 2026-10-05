@@ -24,4 +24,5 @@ if state == 'offered' then
 else
   redis.call('HSET', KEYS[3], 'status', 'assigned', 'driver', id, 't_assigned', now)
 end
+redis.call('SADD', 'rides:open', ride)        -- index of rides holding a driver (the audit reads only these)
 return 1

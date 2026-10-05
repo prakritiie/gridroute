@@ -14,6 +14,7 @@ if d and redis.call('GET', 'lock:driver:' .. d) == ride then return 0 end    -- 
 
 local lat, lng, t_req = unpack(redis.call('HMGET', KEYS[1], 'lat', 'lng', 't_req'))
 redis.call('HSET', KEYS[1], 'status', 'queued', 't_offer_expired', now)
+redis.call('SREM', 'rides:open', ride)
 redis.call('HDEL', KEYS[1], 'driver')
 redis.call('HINCRBY', KEYS[1], 'attempts', 1)
 redis.call('ZREM', 'offers', ride)

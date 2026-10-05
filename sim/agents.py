@@ -28,7 +28,7 @@ def straight_route(frm: tuple[float, float], to: tuple[float, float], speed_mps:
 
 @dataclass
 class Leg:
-    kind: str                      # "pickup" | "trip"
+    kind: str                      # "pickup" | "trip" | "cruise"
     ride_id: str
     route: Route
     start_sim: float               # sim seconds
@@ -58,7 +58,7 @@ class Driver:
     mode: str = IDLE
     ride_id: str | None = None
     leg: Leg | None = None
-    empty_m: float = 0.0           # driven without a passenger (pickup legs)
+    empty_m: float = 0.0           # driven without a passenger (pickup and cruise legs)
     loaded_m: float = 0.0
     trips: int = 0
 
@@ -75,7 +75,8 @@ class Fleet:
         return cls(ds, phase={d: i % 8 for i, d in enumerate(ds)})
 
     def accept(self, driver_id: str, ride_id: str) -> bool:
-        """True if the driver takes the ride now. Repeat offers of the same ride are ignored (False)."""
+        """True if the driver takes the ride now. Repeat offers of the same ride are ignored (False).
+        A cruising driver is idle: it drops the cruise where it stands and takes the ride."""
         d = self.drivers.get(driver_id)
         if d is None:
             return False
@@ -83,7 +84,15 @@ class Fleet:
             if d.ride_id != ride_id:
                 self.conflicts += 1
             return False
-        d.mode, d.ride_id = ROUTING, ride_id
+        d.mode, d.ride_id, d.leg = ROUTING, ride_id, None
+        return True
+
+    def start_cruise(self, driver_id: str, leg: Leg) -> bool:
+        """An idle driver drives somewhere empty (roaming now; repositioning in M3). Ignored if it got busy."""
+        d = self.drivers[driver_id]
+        if d.mode != IDLE or d.leg is not None:
+            return False
+        d.leg = leg
         return True
 
     def start_leg(self, driver_id: str, leg: Leg) -> bool:
@@ -112,7 +121,9 @@ class Fleet:
             if d.leg.done(sim_t):
                 leg = d.leg
                 d.leg = None
-                if leg.kind == "pickup":
+                if leg.kind == "cruise":
+                    d.empty_m += leg.route.distance_m     # still idle, now somewhere else
+                elif leg.kind == "pickup":
                     d.empty_m += leg.route.distance_m
                     d.mode = ROUTING                      # waiting for the trip route
                 else:

@@ -2,7 +2,8 @@
 
     python -m sim.riders --rate 5          # ~5 ride requests per second, Poisson arrivals
 
-Pickups come from the same hotspots as the drivers; dropoffs are 0.5-6 km away in a random direction.
+Pickups and drop-offs are real 2016 taxi locations (sim/data/nyc_points.npy), 0.5-8 km apart, so riders
+stand on streets, never in a river.
 """
 from __future__ import annotations
 
@@ -14,19 +15,25 @@ import time
 import httpx
 import numpy as np
 
-from core.config import LAT_MAX, LAT_MIN, LNG_MAX, LNG_MIN
-from sim.world import M_PER_DEG_LAT, sample_points
+from core.osrm import _hav_m
+from sim import points
+
+POINTS = points.load()
 
 
-def make_requests(rng: np.random.Generator, k: int) -> list[dict]:
-    lat, lng = sample_points(rng, k)
-    dist = rng.uniform(500, 6000, k)
-    theta = rng.uniform(0, 2 * np.pi, k)
-    dlat = np.clip(lat + dist * np.cos(theta) / M_PER_DEG_LAT, LAT_MIN, LAT_MAX)
-    dlng = np.clip(lng + dist * np.sin(theta) / (M_PER_DEG_LAT * np.cos(np.radians(lat))), LNG_MIN, LNG_MAX)
-    return [{"lat": round(float(a), 6), "lng": round(float(b), 6),
-             "dropoff_lat": round(float(c), 6), "dropoff_lng": round(float(d), 6)}
-            for a, b, c, d in zip(lat, lng, dlat, dlng)]
+def make_requests(rng: np.random.Generator, k: int, pts: np.ndarray | None = None) -> list[dict]:
+    """k ride requests between real 2016 taxi locations (sim/data/nyc_points.npy), 0.5-8 km apart."""
+    pts = POINTS if pts is None else pts
+    out = []
+    for _ in range(k):
+        a = pts[rng.integers(len(pts))]
+        for _try in range(30):
+            b = pts[rng.integers(len(pts))]
+            if 500 <= _hav_m((a[0], a[1]), (b[0], b[1])) <= 8000:
+                break
+        out.append({"lat": round(float(a[0]), 6), "lng": round(float(a[1]), 6),
+                    "dropoff_lat": round(float(b[0]), 6), "dropoff_lng": round(float(b[1]), 6)})
+    return out
 
 
 async def run(a: argparse.Namespace) -> None:

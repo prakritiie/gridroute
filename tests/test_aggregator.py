@@ -98,5 +98,6 @@ def test_audit_feeds_fleet_kpis(r, s):
     assert agg.fleet["busy"] == 1 and agg.fleet["online"] == 2 and agg.fleet["double_bookings"] == 0
 
     r.hset("ride:r2", mapping={"status": "assigned", "driver": "d1"})      # plant a double-booking
+    r.sadd("rides:open", "r2")
     agg.run_audit()
     assert agg.fleet["double_bookings"] == 1

@@ -7,6 +7,7 @@ redis.call('DEL', KEYS[2])
 redis.call('HSET', KEYS[1], 'status', 'available')
 redis.call('HDEL', KEYS[1], 'ride')
 redis.call('HSET', KEYS[3], 'status', 'completed', 't_done', ARGV[3])
+redis.call('SREM', 'rides:open', ARGV[2])
 
 -- Re-index at the last known position right away (spec v2 waited for the next ping, which left a
 -- fresh available driver outside every cell for up to 4 s: a C2 violation and a lost match window).

@@ -17,10 +17,10 @@ stack:         ## everything: gateway :8000, workers, simulator, riders, Prometh
 	SIM_DRIVERS=$(DRIVERS) RIDE_RATE=$(RIDE_RATE) docker compose up -d --build --scale ingest=$(INGEST) --scale matcher=$(MATCHERS)
 
 down:
-	docker compose --profile osrm down
+	docker compose --profile bench --profile ml down
 
 osrm:          ## one-time: download the NYC extract, build the MLD graph (~1 min), serve on :5001
-	docker compose --profile osrm up -d osrm
+	docker compose up -d osrm
 
 gateway:       ## host processes below need `make up` (Redis) and run one per terminal
 	$(PY) -m uvicorn gateway.app:app --port 8000

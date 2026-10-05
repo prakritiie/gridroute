@@ -23,6 +23,7 @@ if status == 'assigned' and redis.call('EXISTS', KEYS[2]) == 0 then
         -- Offer never accepted (same outcome as expire_offer.lua, whichever runs first): back to the queue
         local lat, lng, t_req = unpack(redis.call('HMGET', rkey, 'lat', 'lng', 't_req'))
         redis.call('HSET', rkey, 'status', 'queued', 't_offer_expired', ts)
+        redis.call('SREM', 'rides:open', ride)
         redis.call('HDEL', rkey, 'driver')
         redis.call('HINCRBY', rkey, 'attempts', 1)
         redis.call('ZREM', 'offers', ride)
@@ -32,6 +33,7 @@ if status == 'assigned' and redis.call('EXISTS', KEYS[2]) == 0 then
                    'type', 'offer_expired', 'ride', ride, 'driver', id, 't', ts)
       elseif rstatus == 'assigned' then
         redis.call('HSET', rkey, 'status', 'expired', 't_expired', ts)
+        redis.call('SREM', 'rides:open', ride)
         redis.call('XADD', 'stream:events', 'MAXLEN', '~', 1000000, '*',
                    'type', 'lease_expired', 'ride', ride, 'driver', id, 't', ts)
       end
