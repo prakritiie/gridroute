@@ -8,8 +8,12 @@ import h3
 import redis
 
 from core import config
+from core.scripts import LUA_DIR
 
 EARTH_R_M = 6_371_000.0
+# Max distance from a res-9 cell centre to its boundary in the NYC service area is 206.0 m (measured over
+# 5,000 cells); 220 m keeps the per-cell distance bound a true lower bound.
+CELL_RADIUS_M = 220.0
 
 
 def now_ms() -> int:
@@ -45,27 +49,29 @@ def candidates(
     now: int | None = None,
     guard: bool = True,
 ) -> list[tuple[str, float]]:
-    """Up to `need` fresh available drivers nearest to (lat, lng).
+    """Up to `need` fresh available drivers nearest to (lat, lng), searching H3 rings 0..kmax.
 
-    Hex rings aren't circles: a driver in a corner of ring k can be farther than one on the inner
-    edge of ring k+1, so after reaching `need` drivers we search ONE more ring before ranking.
-    `guard=False` exists only so a test can show what goes wrong without it.
+    One round trip: ring_search.lua visits cells best-first by a lower bound on their distance and stops once
+    no remaining cell can beat the need-th driver found (exact within the rings; it replaced the k+1 ring
+    guard, which bench/micro.py showed touched ~1,000 drivers per query at Manhattan density).
+    `guard=False` disables the bound check, so a test can show what goes wrong without it.
     """
     now = now if now is not None else now_ms()
+    lat, lng = float(lat), float(lng)
     origin = h3.latlng_to_cell(lat, lng, config.RES_DRIVER)
-    ids: list[str] = []
-    hit_k = None
-    for k in range(kmax + 1):
-        pipe = r.pipeline(transaction=False)
-        for c in h3.grid_ring(origin, k):
-            pipe.zrangebyscore(f"cell:{c}", now - max_age_ms, "+inf")     # fresh drivers only
-        for part in pipe.execute():
-            ids.extend(part)
-        if len(ids) >= need and hit_k is None:
-            hit_k = k
-        if hit_k is not None and (not guard or k >= hit_k + 1):
-            break
-    return rank_by_haversine(r, lat, lng, ids)[:need]
+    cells = [c for k in range(kmax + 1) for c in h3.grid_ring(origin, k)]
+    bounded = sorted((max(0.0, haversine_m(lat, lng, *h3.cell_to_latlng(c)) - CELL_RADIUS_M), c) for c in cells)
+    flat = _ring_script(r)(args=[need, now - max_age_ms, int(guard), lat, lng, len(bounded),
+                                 *(v for b, c in bounded for v in (c, math.floor(b * 10) / 10))])   # round DOWN: stays a lower bound
+    return [(flat[i], float(flat[i + 1])) for i in range(0, len(flat), 2)]
+
+
+def _ring_script(r: redis.Redis):
+    script = getattr(r, "_gridroute_ring_search", None)
+    if script is None:
+        script = r.register_script((LUA_DIR / "ring_search.lua").read_text())
+        r._gridroute_ring_search = script
+    return script
 
 
 def brute_force(

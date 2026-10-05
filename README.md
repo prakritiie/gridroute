@@ -9,7 +9,8 @@ Design and plan: [docs/implementation.md](docs/implementation.md).
 ## Run it
 
 ```bash
-docker compose up -d --build --scale ingest=2 --scale matcher=2   # Redis, gateway :8000, workers, 5k drivers, riders
+docker compose up -d --build --scale ingest=2 --scale matcher=2   # Redis, gateway :8000, workers, 5k drivers, riders,
+                                                                  # Prometheus :9090, Grafana :3001
 cd web && npm install && npm run dev                              # ops dashboard on :3000
 ```
 
@@ -30,6 +31,7 @@ M1 (core engine) is nearly complete. These claims are tested in CI and hold in l
 | C2 Location state stays consistent | Every fresh, available driver is in exactly one cell; audited live every 10 s |
 | C3 Nearby lookup is correct | Ring search top-5 = brute force on 500/500 queries (285/500 wrong without the k+1 guard) |
 | C4 The system heals itself | Silent drivers leave search in ≤ 30 s and the index in ≤ 35 s; the simulator survives gateway restarts |
+| C5 The core is fast, measured fairly | [Benchmarks](docs/benchmarks.md) vs Redis GEO and PostGIS on real positions, 1k → 100k drivers. H3 is the fastest writer (24–38k position updates/s) and beats Redis GEO lookups at 100k (4.6 ms p50); PostGIS's KNN index wins pure lookup at high density (1.0 ms), and one Redis caps near 200 lookups/s at Manhattan density. The benchmark drove a best-first rewrite of the search (4.6× faster at 100k). |
 
 ## Results so far
 

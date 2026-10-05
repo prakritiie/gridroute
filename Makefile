@@ -5,7 +5,7 @@ INGEST ?= 2
 MATCHERS ?= 2
 RIDE_RATE ?= 5
 
-.PHONY: install up down stack osrm gateway sim riders ingest matcher reaper aggregator web data clean congestion replay report test audit
+.PHONY: install up down stack osrm gateway sim riders ingest matcher reaper aggregator web data clean congestion replay report bench test audit
 
 install:
 	$(PY) -m pip install -e ".[dev]"
@@ -13,7 +13,7 @@ install:
 up:            ## Redis only
 	docker compose up -d --wait redis
 
-stack:         ## full M1 loop in containers: gateway :8000, workers, simulator, riders
+stack:         ## everything: gateway :8000, workers, simulator, riders, Prometheus :9090, Grafana :3001
 	SIM_DRIVERS=$(DRIVERS) RIDE_RATE=$(RIDE_RATE) docker compose up -d --build --scale ingest=$(INGEST) --scale matcher=$(MATCHERS)
 
 down:
@@ -64,6 +64,13 @@ replay:        ## R0 protocol: Tue 7 Jun 2016 07-09, 20% demand, 1,600 drivers, 
 
 report:        ## results table from every recorded run -> docs/results.md
 	$(PY) -m eval.report --write docs/results.md
+
+bench:         ## H3 vs Redis GEO vs PostGIS at 1k-100k drivers -> docs/benchmarks.md (needs the trip data)
+	docker compose --profile bench up -d --build postgis bench-api
+	$(PY) -m bench.micro
+	$(PY) -m bench.k6run
+	$(PY) -m bench.report
+	docker compose --profile bench stop postgis bench-api
 
 test: up
 	$(PY) -m pytest

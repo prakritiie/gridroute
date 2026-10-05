@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "duckdb>=1.1"]
 data = ["duckdb>=1.1"]
+bench = ["psycopg[binary]>=3.2", "duckdb>=1.1"]
 # api and ml extras get added as those milestones start
 
 [build-system]
@@ -24,7 +25,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["core*", "data*", "gateway*", "workers*", "sim*", "ml*", "eval*", "tools*"]
+include = ["core*", "data*", "gateway*", "workers*", "sim*", "ml*", "eval*", "tools*", "bench*"]
 
 [tool.setuptools.package-data]
 core = ["lua/*.lua"]

@@ -1,0 +1,20 @@
+# Prometheus pulls /metrics from every core service (spec arrow 6).
+# Workers scale with `--scale`; Docker's DNS returns one A record per replica, so dns_sd finds them all.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: gateway
+    static_configs:
+      - targets: ["gateway:8000"]
+
+  - job_name: workers
+    dns_sd_configs:
+      - names: [ingest, matcher, reaper, aggregator]
+        type: A
+        port: 9100
+        refresh_interval: 15s
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        target_label: service

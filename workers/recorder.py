@@ -9,6 +9,7 @@ no consumer group or run tagging needed, and re-recording a run is idempotent.
 """
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
@@ -33,30 +34,39 @@ def _events(r: redis.Redis, start_id: str, end_id: str) -> list[dict]:
         cursor = batch[-1][0]
 
 
+def _write_parquet(con, path: Path, columns: list[str], types: dict[str, str], rows) -> None:
+    tmp = path.with_suffix(".csv")
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(columns)
+        for row in rows:
+            w.writerow(["" if v is None else v for v in row])
+    con.execute(f"""COPY (SELECT * FROM read_csv('{tmp.as_posix()}', header=true, nullstr='', columns={types!r}))
+                    TO '{path.as_posix()}' (FORMAT parquet)""")
+    tmp.unlink()
+
+
 def record(r: redis.Redis, run_id: str, start_id: str, end_id: str, rides: dict[str, dict], cfg: dict,
            runs_dir: Path) -> Path:
     out = runs_dir / run_id
     out.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
 
+    # Bulk path: CSV -> one typed read_csv. (DuckDB's executemany inserts row by row: 35k events took >10 min.)
     events = _events(r, start_id, end_id)
-    con.execute("CREATE TABLE ev (" + ", ".join(
-        f"{c} {'DOUBLE' if c in NUMERIC else 'VARCHAR'}" for c in EVENT_COLUMNS) + ")")
-    con.executemany(f"INSERT INTO ev VALUES ({', '.join('?' * len(EVENT_COLUMNS))})", [
-        [(float(e[c]) if e.get(c) not in (None, "") else None) if c in NUMERIC else e.get(c) for c in EVENT_COLUMNS]
-        for e in events])
-    con.execute(f"COPY ev TO '{(out / 'events.parquet').as_posix()}' (FORMAT parquet)")
+    _write_parquet(con, out / "events.parquet", EVENT_COLUMNS,
+                   {c: ("DOUBLE" if c in NUMERIC else "VARCHAR") for c in EVENT_COLUMNS},
+                   ([e.get(c) for c in EVENT_COLUMNS] for e in events))
 
     pipe = r.pipeline(transaction=False)
     ids = list(rides)
     for rid in ids:
         pipe.hmget(f"ride:{rid}", "status", "driver", "attempts")
     states = pipe.execute()
-    con.execute("""CREATE TABLE rd (ride VARCHAR, status VARCHAR, driver VARCHAR, attempts INTEGER,
-                                    req_sim DOUBLE, assigned_sim DOUBLE, real_trip_s DOUBLE)""")
-    con.executemany("INSERT INTO rd VALUES (?, ?, ?, ?, ?, ?, ?)", [
+    ride_cols = {"ride": "VARCHAR", "status": "VARCHAR", "driver": "VARCHAR", "attempts": "INTEGER",
+                 "req_sim": "DOUBLE", "assigned_sim": "DOUBLE", "real_trip_s": "DOUBLE"}
+    _write_parquet(con, out / "rides.parquet", list(ride_cols), ride_cols, (
         [rid, s[0], s[1], int(s[2]) if s[2] else 0, rides[rid]["req_sim"], rides[rid].get("assigned_sim"),
-         float(rides[rid]["real_s"])] for rid, s in zip(ids, states)])
-    con.execute(f"COPY rd TO '{(out / 'rides.parquet').as_posix()}' (FORMAT parquet)")
+         float(rides[rid]["real_s"])] for rid, s in zip(ids, states)))
     (out / "run.json").write_text(json.dumps({"run_id": run_id, **cfg, "events": len(events), "rides": len(ids)}, indent=2))
     return out

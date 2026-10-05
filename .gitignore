@@ -13,6 +13,8 @@ data/**/*.parquet
 data/*.osm.pbf
 models/*/v*/
 runs/
+bench/k6/out/
+bench/k6/points.json
 
 # Web
 web/node_modules/

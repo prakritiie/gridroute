@@ -13,6 +13,7 @@ COPY sim ./sim
 COPY ml ./ml
 COPY eval ./eval
 COPY tools ./tools
-RUN pip install .
+COPY bench ./bench
+RUN pip install ".[bench]"
 
 CMD ["python", "-m", "tools.audit"]

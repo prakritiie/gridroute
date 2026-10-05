@@ -114,6 +114,7 @@ class Aggregator:
             except redis.ResponseError:
                 info = None
             lag[group] = int((info or {}).get("lag") or 0) + int((info or {}).get("pending") or 0)
+            metrics.stream_pending.labels(stream.split(":", 1)[1]).set(lag[group])
         available = sum(n for _, n, _ in snap["res"][str(config.RES_DRIVER)])
         return {
             "t": now,

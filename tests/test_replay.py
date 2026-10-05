@@ -140,3 +140,16 @@ def test_recorder_and_report_compute_the_row(r, tmp_path):
     assert m["congestion_x"] == 2.0 and m["conflicts"] == 0
     assert 40 < m["decision_p99_ms"] <= 50
     assert json.loads((out / "run.json").read_text())["rides"] == 4
+
+
+def test_recorder_handles_a_full_run_quickly(r, tmp_path):
+    """Regression: row-by-row inserts took >10 min for a 35k-event run. The bulk path must stay fast."""
+    import time as _time
+    pipe = r.pipeline(transaction=False)
+    for i in range(30_000):
+        pipe.xadd("stream:events", {"type": "batch", "ms": i % 50, "n": 3}, id=f"{1000 + i}-0")
+    pipe.execute()
+    t = _time.perf_counter()
+    out = record(r, "big", "0-0", "+", {}, {"policy": "x", "window_s": "1"}, tmp_path)
+    assert _time.perf_counter() - t < 10
+    assert duckdb.connect().execute(f"SELECT count(*) FROM '{(out / 'events.parquet').as_posix()}'").fetchone()[0] == 30_000
