@@ -174,3 +174,27 @@ def test_demo_points_are_real_nyc_locations():
     pts = points.load()
     assert len(pts) == 40_000
     assert ((pts[:, 0] >= LAT_MIN) & (pts[:, 0] <= LAT_MAX) & (pts[:, 1] >= LNG_MIN) & (pts[:, 1] <= LNG_MAX)).all()
+
+
+def test_live_demo_resumes_trips_after_a_restart(r):
+    """Regression: a redeploy restarted the demo sim, which forgot every trip in progress; Redis kept those
+    drivers 'assigned' with nobody to finish them (4,922 of 5,000 stuck). A restart must resume them."""
+    import argparse
+    from sim.live import Live
+    from sim.agents import ROUTING
+    lv = Live(argparse.Namespace(seed=0, drivers=4, id_prefix="d"))
+    r.hset("driver:d0", mapping={"lat": 40.75, "lng": -73.98, "status": "assigned", "ride": "r1"})
+    r.hset("ride:r1", mapping={"status": "assigned", "driver": "d0", "lat": 40.751, "lng": -73.981,
+                               "dlat": 40.77, "dlng": -73.96})
+    r.hset("driver:d1", mapping={"lat": 40.70, "lng": -74.00, "status": "assigned", "ride": "r2"})
+    r.hset("ride:r2", mapping={"status": "offered", "driver": "d1", "lat": 40.705, "lng": -74.005})
+    r.hset("driver:d2", mapping={"lat": 40.72, "lng": -73.99, "status": "available"})
+    r.hset("driver:d3", mapping={"lat": 40.73, "lng": -73.95, "status": "assigned", "ride": "gone"})   # stale ride
+
+    todo = sorted(lv.resume(r))
+    assert todo[0][:3] == ("d0", "r1", "trip") and todo[0][3] == (40.77, -73.96)      # finish the trip
+    assert todo[1][:3] == ("d1", "r2", "pickup") and todo[1][3] == (40.705, -74.005)  # take up the offer
+    assert len(todo) == 2
+    f = lv.fleet.drivers
+    assert (f["d0"].lat, f["d2"].lng) == (40.75, -73.99)                               # last known positions
+    assert f["d0"].mode == ROUTING and f["d1"].mode == ROUTING and f["d2"].mode == IDLE and f["d3"].mode == IDLE

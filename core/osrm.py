@@ -91,3 +91,28 @@ async def route(client: httpx.AsyncClient, frm: tuple[float, float], to: tuple[f
     for a, b in zip(coords, coords[1:]):
         cum.append(cum[-1] + _hav_m(a, b))
     return Route(float(r["duration"]), float(r["distance"]), coords, cum)
+
+
+_sync_client: httpx.Client | None = None
+
+
+def table(sources: list[tuple[float, float]], destinations: list[tuple[float, float]],
+          base_url: str = config.OSRM_URL, timeout_s: float = config.OSRM_TIMEOUT_S):
+    """One many-to-many call for the matcher: (durations, distances) as [source][destination] lists of
+    seconds / metres (None where unroutable), or None if OSRM doesn't answer within timeout_s.
+    The caller falls back to B3 on None, so dispatch never waits on routing."""
+    global _sync_client
+    if _sync_client is None:
+        _sync_client = httpx.Client(base_url=base_url, timeout=timeout_s)
+    coords = ";".join(_coord(*p) for p in sources) + ";" + ";".join(_coord(*p) for p in destinations)
+    n = len(sources)
+    params = {"sources": ";".join(map(str, range(n))),
+              "destinations": ";".join(map(str, range(n, n + len(destinations)))),
+              "annotations": "duration,distance"}
+    try:
+        j = _sync_client.get(f"/table/v1/driving/{coords}", params=params, timeout=timeout_s).json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    if j.get("code") != "Ok":
+        return None
+    return j["durations"], j["distances"]

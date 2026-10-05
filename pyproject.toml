@@ -13,7 +13,9 @@ dependencies = [
     "httpx>=0.27",
     "prometheus-client>=0.20",
     "holidays>=0.50",
-    "lightgbm>=4.5",            # in-process ETA model in the matcher (CPU inference; GPU training is ml/Dockerfile.gpu)
+    "lightgbm>=4.5",
+    "scipy>=1.11",              # Hungarian assignment (linear_sum_assignment)
+    "tzdata>=2024.1",           # America/New_York on slim images and Windows            # in-process ETA model in the matcher (CPU inference; GPU training is ml/Dockerfile.gpu)
 ]
 
 [project.optional-dependencies]

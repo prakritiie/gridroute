@@ -61,12 +61,14 @@ def record(r: redis.Redis, run_id: str, start_id: str, end_id: str, rides: dict[
     pipe = r.pipeline(transaction=False)
     ids = list(rides)
     for rid in ids:
-        pipe.hmget(f"ride:{rid}", "status", "driver", "attempts")
+        pipe.hmget(f"ride:{rid}", "status", "driver", "attempts", "eta_pred", "eta_fallback")
     states = pipe.execute()
     ride_cols = {"ride": "VARCHAR", "status": "VARCHAR", "driver": "VARCHAR", "attempts": "INTEGER",
-                 "req_sim": "DOUBLE", "assigned_sim": "DOUBLE", "real_trip_s": "DOUBLE"}
+                 "req_sim": "DOUBLE", "assigned_sim": "DOUBLE", "real_trip_s": "DOUBLE",
+                 "eta_pred": "DOUBLE", "eta_fallback": "INTEGER"}
     _write_parquet(con, out / "rides.parquet", list(ride_cols), ride_cols, (
         [rid, s[0], s[1], int(s[2]) if s[2] else 0, rides[rid]["req_sim"], rides[rid].get("assigned_sim"),
-         float(rides[rid]["real_s"])] for rid, s in zip(ids, states)))
+         float(rides[rid]["real_s"]), float(s[3]) if s[3] else None, int(s[4]) if s[4] else 0]
+        for rid, s in zip(ids, states)))
     (out / "run.json").write_text(json.dumps({"run_id": run_id, **cfg, "events": len(events), "rides": len(ids)}, indent=2))
     return out

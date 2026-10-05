@@ -13,7 +13,7 @@ WS /ws/ops      down: {"type":"hexes"|"kpis"|"match","data":...}; on connect the
                       latest kpis and hexes are sent first. Each client has a bounded queue: a slow
                       browser drops frames instead of slowing everyone else.
 POST /rides     {lat,lng[,dropoff_lat,dropoff_lng]} -> 202 {ride_id}
-GET  /rides/{id}, GET /hexes?res=9|8|7, GET /kpis, GET /healthz, GET /metrics
+GET  /rides/{id}, GET /rides/{id}/explain, GET /hexes?res=9|8|7, GET /kpis, GET /healthz, GET /metrics
 """
 from __future__ import annotations
 
@@ -176,6 +176,15 @@ async def get_ride(ride_id: str) -> dict:
     if not ride:
         raise HTTPException(404, "ride not found")
     return {"ride_id": ride_id, **ride}
+
+
+@app.get("/rides/{ride_id}/explain")
+async def explain(ride_id: str) -> dict:
+    """Why this driver: every candidate with straight-line metres, OSRM and model seconds, and the cost used."""
+    raw = await app.state.r.get(f"explain:{ride_id}")
+    if not raw:
+        raise HTTPException(404, "no explanation for this ride (unmatched, or older than an hour)")
+    return json.loads(raw)
 
 
 @app.get("/hexes")

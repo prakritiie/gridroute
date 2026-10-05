@@ -35,6 +35,12 @@ services:
   matcher:
     <<: *app
     command: ["python", "-m", "workers.matcher"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      METRICS_PORT: "9100"
+      OSRM_URL: http://osrm:5000
+    volumes:
+      - ./models:/app/models:ro      # model registry (models/eta/vN); the Redis pointer picks the version
 
   reaper:
     <<: *app
@@ -194,17 +200,18 @@ services:
     command:
       - |
         set -e
-        if [ -f /data/region.osrm.mldgr ]; then echo "graph already built, skipping"; exit 0; fi
-        osrm-extract -p /opt/car.lua /data/region.osm.pbf
-        osrm-partition /data/region.osrm
-        osrm-customize /data/region.osrm
+        if [ -f /data/region.osrm.hsgr ]; then echo "graph already built, skipping"; exit 0; fi
+        [ -f /data/region.osrm.ebg ] || osrm-extract -p /opt/car.lua /data/region.osm.pbf
+        # Contraction Hierarchies: the matcher's many-to-many /table is ~10x faster than on MLD
+        # (160 drivers x 20 pickups: 0.8-1.1 s on MLD, measured)
+        osrm-contract /data/region.osrm
     depends_on:
       osrm-download:
         condition: service_completed_successfully
 
   osrm:
     image: ghcr.io/project-osrm/osrm-backend:v5.27.1
-    command: ["osrm-routed", "--algorithm", "mld", "--max-table-size", "10000", "/data/region.osrm"]
+    command: ["osrm-routed", "--algorithm", "ch", "--max-table-size", "10000", "/data/region.osrm"]
     ports:
       - "5001:5000"   # host 5000 is often taken (AirPlay / other dev servers)
     volumes:

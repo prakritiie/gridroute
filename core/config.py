@@ -36,6 +36,7 @@ RING_KMAX = _int("RING_KMAX", 3)
 CANDIDATES_NEED = _int("CANDIDATES_NEED", 5)
 MATCH_INTERVAL_S = 2.0
 MATCH_BATCH = _int("MATCH_BATCH", 500)
+MATCH_POLICY = os.environ.get("MATCH_POLICY", "greedy-distance")   # a replay overrides it via config:policy
 MAX_ATTEMPTS = _int("MAX_ATTEMPTS", 5)    # default; a replay overrides it per run via config:max_attempts
 OSRM_TIMEOUT_S = 0.150
 

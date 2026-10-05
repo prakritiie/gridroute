@@ -44,6 +44,11 @@ def run_metrics(run_dir: Path, warmup_s: float = WARMUP_S) -> dict:
         SELECT avg(leg_s), quantile_cont(leg_s, 0.9), avg(wait_s), avg(match_s), count(*), sum(leg_s) / nullif(sum(osrm_s), 0)
         FROM ev JOIN rides ON ev.ride = rides.ride WHERE ev.type = 'pickup'""").fetchone()
     p99 = con.execute("SELECT quantile_cont(ms, 0.99), count(*) FROM ev WHERE type = 'batch'").fetchone()
+    # How well the matcher's own pickup estimate matched the true (simulated) drive: the ETA model online
+    cols = [c[0] for c in con.execute("DESCRIBE rides").fetchall()]
+    eta_err = con.execute("""
+        SELECT avg(abs(rides.eta_pred - ev.leg_s)) FROM ev JOIN rides ON ev.ride = rides.ride
+        WHERE ev.type = 'pickup' AND rides.eta_pred IS NOT NULL""").fetchone()[0] if "eta_pred" in cols else None
     fleet = con.execute(
         "SELECT drivers, sim_hours, empty_km, loaded_km, conflicts FROM ev WHERE type = 'fleet' ORDER BY id DESC LIMIT 1"
     ).fetchone()
@@ -72,6 +77,7 @@ def run_metrics(run_dir: Path, warmup_s: float = WARMUP_S) -> dict:
         "decision_p99_ms": p99[0], "batches": p99[1],
         "conflicts": int(fleet[4]) if fleet else None,
         "idle_when_unmatched": idle_when_unmatched,
+        "eta_mae_s": eta_err,
     }
 
 
@@ -91,12 +97,12 @@ def mmss(s: float) -> str:
 
 def table(metrics: list[dict]) -> str:
     lines = ["| Row | Matching | Cost | Repositioning | Seeds | Pickup mean | Pickup p90 | Unmatched % | "
-             "Empty km / driver-h | Decision p99 |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
+             "Empty km / driver-h | Decision p99 | Pickup-estimate error |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     for policy, (row, match, cost, repos) in ROWS.items():
         ms = [m for m in metrics if m["policy"] == policy]
         if not ms:
-            lines.append(f"| {row} | {match} | {cost} | {repos} | | | | | | |")
+            lines.append(f"| {row} | {match} | {cost} | {repos} | | | | | | | |")
             continue
         pm = [m["pickup_mean_s"] for m in ms]
         p90 = [m["pickup_p90_s"] for m in ms]
@@ -106,7 +112,8 @@ def table(metrics: list[dict]) -> str:
             f"{mmss(sum(p90) / len(p90))}{' ± ' + mmss((max(p90) - min(p90)) / 2) if len(ms) > 1 else ''} | "
             f"{_cell([m['unmatched_pct'] for m in ms], '.2f')} | "
             f"{_cell([m['empty_km_per_driver_h'] for m in ms], '.2f')} | "
-            f"{_cell([m['decision_p99_ms'] for m in ms], '.0f')} ms |")
+            f"{_cell([m['decision_p99_ms'] for m in ms], '.0f')} ms | "
+            f"{mmss(sum(e) / len(e)) if (e := [m['eta_mae_s'] for m in ms if m['eta_mae_s'] is not None]) else ''} |")
     return "\n".join(lines)
 
 

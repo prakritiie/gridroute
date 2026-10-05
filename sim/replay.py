@@ -28,7 +28,7 @@ import duckdb
 import httpx
 import redis
 
-from core import config, osrm
+from core import clock, config, osrm
 from sim.agents import IDLE, Fleet, Leg, straight_route
 from sim.congestion import Congestion, hour_of_week
 from sim.transport import WebSocketTransport
@@ -125,6 +125,7 @@ class Replay:
         # Rider patience is sim time: retries happen every MATCH_INTERVAL_S of wall time = that x speed sim time
         attempts = max(1, math.ceil(a.patience_min * 60 / (a.speed * config.MATCH_INTERVAL_S)))
         self.r.set("config:max_attempts", attempts)
+        self.r.set("config:policy", a.policy)                 # the matcher switches policy for this run
         cfg["max_attempts"] = str(attempts)
         self.r.hset(f"run:{self.run_id}", mapping=cfg | {"status": "running"})
         self.r.set("run:current", self.run_id)
@@ -137,6 +138,7 @@ class Replay:
         self.http_gw = httpx.AsyncClient(base_url=a.gateway_http, timeout=10)
         self.tx = await WebSocketTransport.connect(a.gateway_ws, list(self.fleet.drivers))
         self.wall0 = time.time()
+        clock.set_sim_clock(self.r, self.t0, a.speed, int(self.wall0 * 1000))   # the model's "now" is June 2016
         next_req, tick, last_report = 0, 0, 0.0
 
         while not self.stop:
@@ -206,7 +208,7 @@ class Replay:
         await self.http.aclose()
         await self.http_gw.aclose()
         self.r.hset(f"run:{self.run_id}", mapping={"status": "done"})
-        self.r.delete("config:max_attempts")
+        self.r.delete("config:max_attempts", "config:policy", clock.KEY)
         out = record(self.r, self.run_id, start_id, end_id, self.rides, cfg, config.DATA_DIR / "runs")
         print(f"recorded {out}", flush=True)
         return self.run_id
@@ -221,7 +223,9 @@ def main() -> None:
     ap.add_argument("--drivers", type=int, default=1600, help="same fleet for every row; mild scarcity at the peak")
     ap.add_argument("--speed", type=float, default=10.0)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--policy", default="greedy-distance", help="label only: the running matcher decides")
+    ap.add_argument("--policy", default="greedy-distance",
+                    choices=["greedy-distance", "greedy-eta", "batch-distance", "batch-eta"],
+                    help="set on the running matchers for this run (spec §8.4 rows R0-R3)")
     ap.add_argument("--patience-min", type=float, default=5, help="sim minutes a rider waits for a driver")
     ap.add_argument("--drain-min", type=float, default=20, help="sim minutes after the window to finish trips")
     ap.add_argument("--gateway-http", default="http://localhost:8000")

@@ -16,7 +16,6 @@ import json
 import os
 import signal
 import time
-from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -25,6 +24,7 @@ import numpy as np
 from core import config, osrm
 from sim import points
 from sim.agents import IDLE, Fleet, Leg, straight_route
+from core.clock import nyc_now
 from sim.congestion import Congestion, hour_of_week
 from sim.transport import WebSocketTransport
 
@@ -50,11 +50,46 @@ class Live:
         self.pending: set[asyncio.Task] = set()
         self.stop = False
 
+    def resume(self, r) -> list[tuple[str, str, str, tuple[float, float]]]:
+        """Pick up where a previous run of this fleet left off, like a driver app restoring its trip after a
+        restart. Without this, every trip in progress at a redeploy stayed 'assigned' in Redis with no process
+        to finish it, until its 60-minute lease ran out (found live: 4,922 of 5,000 drivers stuck busy).
+
+        Drivers resume at their last known position. Returns (driver, ride, kind, target) legs to start:
+        an accepted trip drives on to its drop-off; a pending offer is accepted, then driven to the pickup."""
+        ids = list(self.fleet.drivers)
+        pipe = r.pipeline(transaction=False)
+        for d in ids:
+            pipe.hmget(f"driver:{d}", "lat", "lng", "status", "ride")
+        todo = []
+        rides = {}
+        for d, (lat, lng, status, ride) in zip(ids, pipe.execute()):
+            if lat is None:
+                continue
+            drv = self.fleet.drivers[d]
+            drv.lat, drv.lng = float(lat), float(lng)
+            if status == "assigned" and ride:
+                rides[d] = ride
+        pipe = r.pipeline(transaction=False)
+        for d, ride in rides.items():
+            pipe.hmget(f"ride:{ride}", "status", "driver", "lat", "lng", "dlat", "dlng")
+        for (d, ride), (rstatus, rdriver, plat, plng, dlat, dlng) in zip(rides.items(), pipe.execute()):
+            if rdriver != d or rstatus not in ("offered", "assigned") or plat is None:
+                continue
+            drop = (float(dlat), float(dlng)) if dlat else self.nearby_point(float(plat), float(plng))
+            self.dropoff[ride] = drop
+            self.fleet.accept(d, ride)                          # idle -> ROUTING for this ride
+            if rstatus == "assigned":
+                todo.append((d, ride, "trip", drop))            # on its way: finish the trip
+            else:
+                todo.append((d, ride, "pickup", (float(plat), float(plng))))
+        return todo
+
     def sim_now(self) -> float:
         return (time.time() - self.wall0) * self.a.speedup
 
     def factor(self, lat: float, lng: float) -> float:
-        return self.cong.factor(lat, lng, hour_of_week(datetime.now())) if self.cong else 1.85
+        return self.cong.factor(lat, lng, hour_of_week(nyc_now())) if self.cong else 1.85
 
     def nearby_point(self, lat: float, lng: float) -> tuple[float, float]:
         for _ in range(20):
@@ -92,6 +127,17 @@ class Live:
         print(f"live: {len(self.fleet.drivers):,} drivers on real streets via {a.osrm} "
               f"(congestion: {'June factors' if self.cong else 'flat 1.85x'}), x{a.speedup}", flush=True)
         self.wall0 = time.time()
+        if a.resume:
+            import redis as _redis
+            todo = self.resume(_redis.Redis.from_url(a.redis_url, decode_responses=True))
+            for d, ride, kind, target in todo:
+                if kind == "pickup":
+                    await self.tx.accept(d, ride)
+                drv = self.fleet.drivers[d]
+                self.spawn(self.ride_leg(d, kind, ride, (drv.lat, drv.lng), target))
+            if todo:
+                print(f"live: resumed {sum(k == 'trip' for _, _, k, _ in todo):,} trips and "
+                      f"{sum(k == 'pickup' for _, _, k, _ in todo):,} offers from the previous run", flush=True)
         tick, last, stats = 0, time.time(), {"accepted": 0, "done": 0}
         while not self.stop:
             if a.duration and time.time() - self.wall0 >= a.duration:
@@ -163,6 +209,9 @@ def main() -> None:
     ap.add_argument("--kill-frac", type=float, default=0.3)
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_WS", "ws://localhost:8000/ws/driver"))
     ap.add_argument("--osrm", default=config.OSRM_URL)
+    ap.add_argument("--redis-url", default=config.REDIS_URL)
+    ap.add_argument("--no-resume", dest="resume", action="store_false",
+                    help="start fresh instead of restoring positions and trips from Redis")
     lv = Live(ap.parse_args())
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: setattr(lv, "stop", True))

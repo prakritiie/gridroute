@@ -15,6 +15,7 @@ decision_latency = Histogram("decision_latency_ms", "Matcher time per batch", bu
 rides_matched = Counter("rides_matched_total", "Rides assigned a driver")
 rides_unmatched = Counter("rides_unmatched_total", "Rides given up after max attempts")
 claim_conflicts = Counter("claim_conflicts_total", "claim_driver returned 0 (driver lost to another claim)")
+eta_fallback = Counter("eta_fallback_total", "Batches scored with B3 because OSRM missed its 150 ms budget")
 
 # Supply + correctness (aggregator)
 drivers_available = Gauge("drivers_available", "Fresh drivers in the cell index")
