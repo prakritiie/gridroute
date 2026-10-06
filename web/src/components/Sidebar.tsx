@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { Sparkline } from "./Sparkline";
 import { ago, dur, num, pct } from "@/lib/format";
+import { DEMO } from "@/lib/playback";
 import { SERIES, divColor, imbalance, rgbCss, type Layer } from "@/lib/palette";
 import type { Cell, Forecast, Kpis, Reposition, Resolution } from "@/lib/types";
 
@@ -100,7 +101,10 @@ function Integrity({ kpis }: { kpis: Kpis | null }) {
           </div>
         </div>
       </div>
-      <p className="footnote">Live audit of C1 + C2 every 10 s · last run {ago(kpis?.audited_at, now)}</p>
+      <p className="footnote">
+        {DEMO ? "Audited every 10 s during the recording (C1 + C2)"
+          : <>Live audit of C1 + C2 every 10 s · last run {ago(kpis?.audited_at, now)}</>}
+      </p>
     </section>
   );
 }

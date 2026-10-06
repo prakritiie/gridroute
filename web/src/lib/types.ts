@@ -38,6 +38,8 @@ export interface Match {
   eta_s: number;
   /** client receive time, ms */
   at: number;
+  /** static demo: when it happened on the replay's clock (ms, shown as NYC time) */
+  sim_at?: number;
 }
 
 export type Link = "connecting" | "live" | "reconnecting";

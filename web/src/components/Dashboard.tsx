@@ -18,13 +18,18 @@ import { useRuns } from "@/lib/lab";
 import { num } from "@/lib/format";
 import { domainMax, imbalance, type Layer } from "@/lib/palette";
 import type { Cell, Explain, Resolution } from "@/lib/types";
-import { GATEWAY_HTTP, GATEWAY_WS, useOps } from "@/lib/useOps";
+import { DEMO, usePlayback, type PlaybackControls } from "@/lib/playback";
+import { GATEWAY_HTTP, GATEWAY_WS, useOps, type OpsState } from "@/lib/useOps";
+import { PlaybackBar } from "./PlaybackBar";
+
+// One build plays a recorded replay (static demo), the other follows the live gateway; same dashboard.
+const useFeed: () => OpsState & { playback?: PlaybackControls } = DEMO ? usePlayback : useOps;
 
 // deck.gl + MapLibre need the browser (WebGL), so the map never renders on the server
 const HexMap = dynamic(() => import("./HexMap"), { ssr: false, loading: () => <div className="map-loading" /> });
 
 export default function Dashboard() {
-  const ops = useOps();
+  const ops = useFeed();
   const [view, setView] = useState<View>("live");
   const lab = useRuns(view === "lab");
   const [compare, setCompare] = useState<string[]>([]);
@@ -39,7 +44,7 @@ export default function Dashboard() {
   const [explain, setExplain] = useState<{ id: string; data: Explain | null; error: string | null } | null>(null);
 
   useEffect(() => {
-    if (!explainId) return;
+    if (!explainId || DEMO) return;
     let alive = true;
     fetch(`${GATEWAY_HTTP}/rides/${explainId}/explain`)
       .then(async (r) => (r.ok ? r.json() : Promise.reject(r.status === 404
@@ -48,7 +53,10 @@ export default function Dashboard() {
       .catch((e) => alive && setExplain({ id: explainId, data: null, error: typeof e === "string" ? e : "Gateway unreachable." }));
     return () => { alive = false; };
   }, [explainId]);
-  const shown = explain && explain.id === explainId ? explain : null;
+  const shown = DEMO && explainId
+    ? { id: explainId, data: null,
+      error: "Match explanations come from the running matcher. Clone the repo and run the stack to see them." }
+    : explain && explain.id === explainId ? explain : null;
 
   // Forecast layer: res-7 hexes, [id, drivers now, requests expected this 15-min slot] in this run's units.
   const forecastCells: Cell[] = useMemo(() => {
@@ -92,7 +100,7 @@ export default function Dashboard() {
 
   return (
     <div className="app">
-      <TopBar view={view} onView={setView} link={ops.link} t={ops.hexes?.t ?? null} layer={layer} res={res} onRes={changeRes}
+      <TopBar view={view} onView={setView} replay={ops.playback?.simClock ?? null} link={ops.link} t={ops.hexes?.t ?? null} layer={layer} res={res} onRes={changeRes}
         onLayer={(l) => { setLayer(l); setSelectedId(null); setHover(null); }} />
 
       {view === "lab" ? (
@@ -140,6 +148,7 @@ export default function Dashboard() {
             (<code>python -m tools.seed_demand</code>), and during every replay.
           </div>
         )}
+        {ops.playback && view !== "lab" && <PlaybackBar p={ops.playback} />}
         {view === "lab" && lab.pending.some((p) => p.status === "running") && (
           <div className="map__notice map__notice--live" role="status">
             <span className="live__dot" aria-hidden />

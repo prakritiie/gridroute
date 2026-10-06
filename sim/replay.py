@@ -35,6 +35,7 @@ import redis
 from core import clock, config, demand, osrm
 from sim.agents import IDLE, Fleet, Leg, straight_route
 from sim.congestion import Congestion, hour_of_week
+from sim.playback import PlaybackRecorder
 from sim.transport import WebSocketTransport
 from tools.reset import reset_sim_state
 from workers.recorder import record
@@ -75,6 +76,7 @@ class Replay:
         self.pending: set[asyncio.Task] = set()
         self.stop = False
         self.cancelled = False
+        self.playback: PlaybackRecorder | None = None
 
     # ---- clock ---------------------------------------------------------------
     def sim_now(self) -> float:
@@ -159,6 +161,11 @@ class Replay:
         print(f"replay {self.run_id}: {len(self.trips):,} requests over {span / 3600:.1f} h sim, "
               f"{len(self.fleet.drivers):,} drivers (~{busy_est:,.0f} busy at steady state), x{a.speed}", flush=True)
 
+        if getattr(a, "playback", False):
+            self.playback = PlaybackRecorder(self.r, {
+                "run_id": self.run_id, "policy": self.label, "day": a.day, "start": a.start, "hours": a.hours,
+                "sample": a.sample, "drivers": a.drivers, "speed": a.speed, "seed": a.seed,
+                "window_s": span, "requests": len(self.trips)})
         start_id = f"{int(time.time() * 1000)}-0"
         self.http = httpx.AsyncClient(base_url=config.OSRM_URL, timeout=10)
         self.http_gw = httpx.AsyncClient(base_url=a.gateway_http, timeout=10)
@@ -184,7 +191,11 @@ class Replay:
                 await asyncio.gather(*(self._request(t) for t in batch))
 
             # offers -> routing to the pickup
+            if self.playback and now <= span:
+                self.playback.tick(now)
             for msg in self.tx.drain():
+                if self.playback and msg.get("type") == "assignment" and now <= span:
+                    self.playback.match(now, msg)
                 if msg.get("type") == "reposition":
                     d = self.fleet.drivers.get(msg["driver_id"])
                     if d and d.mode == IDLE:
@@ -258,6 +269,9 @@ class Replay:
         out = record(self.r, self.run_id, start_id, end_id, self.rides, cfg,
                      Path(a.runs_dir) if getattr(a, "runs_dir", None) else config.DATA_DIR / "runs")
         print(f"recorded {out}", flush=True)
+        if self.playback:
+            print(f"playback {self.playback.write(out / 'playback.json')} "
+                  f"({len(self.playback.frames)} frames, {len(self.playback.matches):,} matches)", flush=True)
         return self.run_id
 
 
@@ -275,6 +289,8 @@ def main() -> None:
                     help="set on the running matchers for this run (spec §8.4 rows R0-R3)")
     ap.add_argument("--reposition", action="store_true",
                     help="turn the repositioner on for this run (row R4 with --policy batch-eta)")
+    ap.add_argument("--playback", action="store_true",
+                    help="also capture frames for the static demo site (sim/playback.py)")
     ap.add_argument("--patience-min", type=float, default=5, help="sim minutes a rider waits for a driver")
     ap.add_argument("--drain-min", type=float, default=20, help="sim minutes after the window to finish trips")
     ap.add_argument("--gateway-http", default="http://localhost:8000")

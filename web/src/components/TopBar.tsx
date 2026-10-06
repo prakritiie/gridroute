@@ -16,6 +16,8 @@ export type View = "live" | "lab" | "chaos";
 const RES_HINT: Record<Resolution, string> = { 9: "0.1 km²", 8: "0.7 km²", 7: "5.2 km²" };
 
 interface Props {
+  /** static demo: the replay's NYC clock instead of the live indicator */
+  replay?: string | null;
   view: View;
   onView: (v: View) => void;
   link: Link;
@@ -26,7 +28,7 @@ interface Props {
   onRes: (r: Resolution) => void;
 }
 
-export function TopBar({ view, onView, link, t, layer, onLayer, res, onRes }: Props) {
+export function TopBar({ replay, view, onView, link, t, layer, onLayer, res, onRes }: Props) {
   const shown: Resolution = layer === "forecast" ? 7 : res;
   return (
     <header className="topbar">
@@ -35,7 +37,9 @@ export function TopBar({ view, onView, link, t, layer, onLayer, res, onRes }: Pr
         <span className="brand__name">GridRoute</span>
         <span className="brand__sep" aria-hidden />
         <nav className="views" aria-label="View">
-          {([["live", "Live"], ["lab", "Policy lab"], ["chaos", "Chaos"]] as [View, string][]).map(([v, label]) => (
+          {([["live", replay ? "Replay" : "Live"], ["lab", "Policy lab"], ["chaos", "Chaos"]] as [View, string][])
+            .filter(([v]) => !(replay && v === "chaos"))         // chaos needs the running system
+            .map(([v, label]) => (
             <button key={v} className={view === v ? "is-active" : ""} aria-current={view === v ? "page" : undefined}
               onClick={() => onView(v)}>{label}</button>
           ))}
@@ -70,11 +74,18 @@ export function TopBar({ view, onView, link, t, layer, onLayer, res, onRes }: Pr
             </button>
           ))}
         </div>
-        <div className={`live live--${link}`} aria-live="polite">
-          <span className="live__dot" aria-hidden />
-          {link === "live" ? "Live" : link === "connecting" ? "Connecting" : "Reconnecting"}
-          <span className="live__clock">{t ? clock(t) : "--:--:--"}</span>
-        </div>
+        {replay ? (
+          <div className="live live--replay">
+            <span className="live__dot" aria-hidden />Replay
+            <span className="live__clock">{replay} NYC</span>
+          </div>
+        ) : (
+          <div className={`live live--${link}`} aria-live="polite">
+            <span className="live__dot" aria-hidden />
+            {link === "live" ? "Live" : link === "connecting" ? "Connecting" : "Reconnecting"}
+            <span className="live__clock">{t ? clock(t) : "--:--:--"}</span>
+          </div>
+        )}
       </div>
     </header>
   );

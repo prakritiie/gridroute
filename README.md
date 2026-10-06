@@ -5,7 +5,8 @@ every multi-key write is an atomic Lua script, and riders are matched without ev
 On top of that core: a learned ETA and a 15-minute demand forecast (LightGBM, trained on GPU on 67M real NYC
 2016 trips), used to pick drivers and to send idle drivers to where riders are about to appear.
 
-Design and plan: [docs/implementation.md](docs/implementation.md).
+Design and plan: [docs/implementation.md](docs/implementation.md). Static demo (a recorded replay, no
+backend): [docs/demo.md](docs/demo.md).
 
 ## Run it
 
@@ -14,6 +15,24 @@ docker compose up -d --build --scale ingest=2 --scale matcher=2   # Redis, gatew
                                                                   # Prometheus :9090, Grafana :3001
 cd web && npm install && npm run dev                              # ops dashboard on :3000
 ```
+
+Set `GRIDROUTE_DATA_DIR` (in `.env` or the shell) to the folder `python -m data.download` fills; the policy
+lab's runner mounts it to replay real trips.
+
+## Explore it
+
+The dashboard has three views:
+
+- **Live.** The map shows supply, demand, imbalance or the 15-minute **forecast** per hex at three sizes,
+  with the moves the repositioner makes. KPIs and a live audit (double-bookings, invariant violations) sit
+  beside it. Click any match to see **why that driver** won: every candidate's straight-line distance, OSRM
+  time, model ETA and cost.
+- **Policy lab.** Pick a June 2016 day and window, greedy or batch matching, distance or ETA cost, and
+  repositioning on or off. The runner pauses the demo, replays real demand through the live system and
+  records it. Compare up to four runs side by side, with changes against a baseline, and export them to CSV.
+- **Chaos.** Silence 10–60% of drivers in an area, burst demand ×10, or deliver pings out of order, then watch
+  recovery: available drivers fall within ~30 s, stale pings are rejected, and the double-booking counter
+  stays at 0.
 
 Tests (need Redis: `docker compose up -d redis`):
 
@@ -24,7 +43,8 @@ pytest
 
 ## Status
 
-M1 (core engine) is nearly complete. These claims are tested in CI and hold in live runs:
+M1–M3 are done (core engine, real data and benchmarks, learned ETA and demand forecasting). M4 adds the
+policy lab, chaos controls and the static demo. These claims are tested in CI and hold in live runs:
 
 | Claim | Evidence |
 |---|---|

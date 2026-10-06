@@ -142,7 +142,9 @@ class Repositioner:
             pipe.set(f"repos:{m['driver_id']}", m["to"], px=cooldown_ms)
             pipe.xadd("stream:events", {"type": "reposition", "driver": m["driver_id"], "from": m["from"],
                                         "to": m["to"], "t": now_ms}, maxlen=1_000_000, approximate=True)
-        pipe.publish(CHANNEL, json.dumps({"t": now_ms, "moves": moves}, separators=(",", ":")))
+        body = json.dumps({"t": now_ms, "moves": moves}, separators=(",", ":"))
+        pipe.publish(CHANNEL, body)
+        pipe.set("reposition:last", body, ex=3600)          # for playback capture and late dashboards
         pipe.execute()
         self.moves_total += len(moves)
         metrics.repositions.inc(len(moves))

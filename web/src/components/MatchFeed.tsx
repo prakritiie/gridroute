@@ -30,7 +30,7 @@ export function MatchFeed({ matches, kpis, selected, onSelect }: {
               </div>
               <div className="feed__line feed__meta">
                 <span>Driver {m.driver_id.toUpperCase()}</span>
-                <time>{clock(m.at)}</time>
+                <time>{clock(m.sim_at ?? m.at)}</time>
               </div>
             </li>
           ))}

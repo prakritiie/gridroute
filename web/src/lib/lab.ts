@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { DEMO } from "./playback";
 import { GATEWAY_HTTP } from "./useOps";
 
 /** eval/report.py run_metrics(), as stored by workers/runner.py */
@@ -96,7 +97,7 @@ export function useRuns(enabled: boolean) {
     const load = async () => {
       let busy = false;
       try {
-        const r = await fetch(`${GATEWAY_HTTP}/runs?limit=200`);
+        const r = await fetch(DEMO ? "demo/runs.json" : `${GATEWAY_HTTP}/runs?limit=200`);
         if (!r.ok) throw new Error(`Gateway error ${r.status}`);
         const data = (await r.json()) as { runs: Run[]; pending: Pending[] };
         if (!alive) return;
@@ -107,7 +108,7 @@ export function useRuns(enabled: boolean) {
       } catch {
         if (alive) setError("Gateway unreachable");
       }
-      if (alive) timer = setTimeout(load, busy ? 2000 : 15000);
+      if (alive && !DEMO) timer = setTimeout(load, busy ? 2000 : 15000);
     };
     load();
     return () => {
@@ -117,6 +118,7 @@ export function useRuns(enabled: boolean) {
   }, [enabled, tick]);
 
   const start = useCallback(async (req: RunRequest): Promise<string | null> => {
+    if (DEMO) return "This is the static demo: experiments need the full stack (clone the repo, docker compose up).";
     const r = await fetch(`${GATEWAY_HTTP}/runs`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(req),
     });
