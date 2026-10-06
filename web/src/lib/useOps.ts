@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { Forecast, HexSnapshot, Kpis, Link, Match, Reposition } from "./types";
 
-export const GATEWAY_WS = process.env.NEXT_PUBLIC_GATEWAY_WS ?? "ws://localhost:8000/ws/ops";
+// 127.0.0.1, not localhost: on Windows, WSL can hold [::1]:8000 and a browser that tries IPv6 first hangs there.
+export const GATEWAY_WS = process.env.NEXT_PUBLIC_GATEWAY_WS ?? "ws://127.0.0.1:8000/ws/ops";
 
 const HISTORY = 300;       // 5 min of 1 Hz KPI frames for the sparklines
 const MATCH_LOG = 40;

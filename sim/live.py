@@ -34,6 +34,7 @@ CRUISE_P = 0.01                    # per idle driver per tick: a cruise starts e
 CRUISE_M = (500, 3000)
 CONGESTION = Path(__file__).parent / "data" / "congestion_june.parquet"
 RECONCILE_S = 30
+PAUSED = "demo:paused"               # set by the policy-lab runner while a replay owns the city
 
 
 class Live:
@@ -91,6 +92,14 @@ class Live:
             else:
                 todo.append((d, ride, "pickup", (float(plat), float(plng))))
         return todo
+
+    def drop_everything(self) -> None:
+        """After a pause the server state was reset: forget every ride and leg, keep positions."""
+        for d in self.fleet.drivers.values():
+            d.mode, d.ride_id, d.leg = IDLE, None, None
+        self.dropoff.clear()
+        self.cruise_pending.clear()
+        self.suspects = {}
 
     def reconcile(self, r) -> tuple[list[tuple[str, str]], list[tuple[str, str, str, tuple[float, float]]]]:
         """Sync with the server like a driver app does, every RECONCILE_S. Acts on a mismatch only when the
@@ -188,7 +197,20 @@ class Live:
                 print(f"live: resumed {sum(k == 'trip' for _, _, k, _ in todo):,} trips and "
                       f"{sum(k == 'pickup' for _, _, k, _ in todo):,} offers from the previous run", flush=True)
         tick, last, stats = 0, time.time(), {"accepted": 0, "done": 0}
+        paused = False
         while not self.stop:
+            if rcon.exists(PAUSED):
+                if not paused:
+                    print("live: paused for a policy-lab run", flush=True)
+                    paused = True
+                self.tx.drain()                              # nothing from before the pause survives it
+                self.tx.drain_rejected()
+                await asyncio.sleep(1.0)
+                continue
+            if paused:
+                self.drop_everything()
+                paused, last_sync = False, time.time()
+                print("live: resumed; every driver is idle where it stood", flush=True)
             if a.duration and time.time() - self.wall0 >= a.duration:
                 break
             if a.kill_after and not self.dead and time.time() - self.wall0 >= a.kill_after:

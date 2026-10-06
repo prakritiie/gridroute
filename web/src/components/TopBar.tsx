@@ -11,9 +11,13 @@ const LAYERS: { id: Layer; label: string }[] = [
   { id: "forecast", label: "Forecast" },
 ];
 
+export type View = "live" | "lab";
+
 const RES_HINT: Record<Resolution, string> = { 9: "0.1 km²", 8: "0.7 km²", 7: "5.2 km²" };
 
 interface Props {
+  view: View;
+  onView: (v: View) => void;
   link: Link;
   t: number | null;
   layer: Layer;
@@ -22,7 +26,7 @@ interface Props {
   onRes: (r: Resolution) => void;
 }
 
-export function TopBar({ link, t, layer, onLayer, res, onRes }: Props) {
+export function TopBar({ view, onView, link, t, layer, onLayer, res, onRes }: Props) {
   const shown: Resolution = layer === "forecast" ? 7 : res;
   return (
     <header className="topbar">
@@ -30,7 +34,12 @@ export function TopBar({ link, t, layer, onLayer, res, onRes }: Props) {
         <span className="brand__mark" aria-hidden />
         <span className="brand__name">GridRoute</span>
         <span className="brand__sep" aria-hidden />
-        <span className="brand__product">Dispatch</span>
+        <nav className="views" aria-label="View">
+          {([["live", "Live"], ["lab", "Policy lab"]] as [View, string][]).map(([v, label]) => (
+            <button key={v} className={view === v ? "is-active" : ""} aria-current={view === v ? "page" : undefined}
+              onClick={() => onView(v)}>{label}</button>
+          ))}
+        </nav>
         <span className="chip">New York</span>
       </div>
 

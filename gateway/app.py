@@ -15,6 +15,9 @@ WS /ws/ops      down: {"type":"hexes"|"kpis"|"match"|"forecast"|"reposition","da
                       browser drops frames instead of slowing everyone else.
 POST /rides     {lat,lng[,dropoff_lat,dropoff_lng]} -> 202 {ride_id}
 GET  /rides/{id}, GET /rides/{id}/explain, GET /hexes?res=9|8|7, GET /kpis, GET /healthz, GET /metrics
+POST /runs      policy lab: queue a replay {day, start, hours, speed, matching, cost, reposition, seed, label?}
+GET  /runs      recorded runs (protocol + lab) with metrics, plus the active and queued requests
+GET  /runs/{id} one run or request; POST /runs/{id}/cancel
 """
 from __future__ import annotations
 
@@ -27,12 +30,14 @@ import time
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager
+from datetime import date, datetime, timedelta
+from typing import Literal
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from core import config, metrics
 from core.config import LAT_MAX, LAT_MIN, LNG_MAX, LNG_MIN
@@ -153,7 +158,7 @@ app = FastAPI(title="GridRoute gateway", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(","),
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST"],                     # POST /runs and /runs/{id}/cancel from the lab
     allow_headers=["*"],
 )
 
@@ -181,6 +186,125 @@ async def create_ride(req: RideRequest) -> dict:
         await pipe.execute()
     metrics.rides_requested.inc()
     return {"ride_id": ride_id}
+
+
+# ---- policy lab ------------------------------------------------------------
+LAB_QUEUE, LAB_ACTIVE, RUNS_INDEX = "lab:queue", "lab:active", "runs:index"
+LAB_MAX_QUEUED = 5
+LAB_DAYS = (date(2016, 6, 1), date(2016, 6, 30))       # the test month: the models never trained on it
+
+
+class RunRequest(BaseModel):
+    day: date = date(2016, 6, 7)
+    start: str = Field("07:00", pattern=r"^\d{2}:(00|15|30|45)$")
+    hours: float = Field(2.0, ge=1.0, le=3.0)
+    speed: Literal[10, 20] = 10
+    matching: Literal["greedy", "batch"] = "batch"
+    cost: Literal["distance", "eta"] = "eta"
+    reposition: bool = False
+    seed: int = Field(1, ge=1, le=99)
+    label: str = Field("", max_length=40)
+
+    @field_validator("day")
+    @classmethod
+    def _june(cls, d: date) -> date:
+        if not LAB_DAYS[0] <= d <= LAB_DAYS[1]:
+            raise ValueError("pick a day in June 2016 (the held-out test month)")
+        return d
+
+    @model_validator(mode="after")
+    def _window(self) -> "RunRequest":
+        t0 = datetime.combine(self.day, datetime.strptime(self.start, "%H:%M").time())
+        if t0 + timedelta(hours=self.hours) > datetime.combine(self.day, datetime.min.time()) + timedelta(days=1):
+            raise ValueError("the window must end by midnight")
+        return self
+
+
+def _run_view(run_id: str, h: dict) -> dict:
+    """run:{id} hash -> API shape (numbers parsed, metrics decoded)."""
+    def num(k):
+        try:
+            return float(h[k])
+        except (KeyError, ValueError):
+            return None
+    try:
+        m = json.loads(h.get("metrics") or "null")
+    except ValueError:
+        m = None
+    return {"id": run_id, "status": h.get("status"), "source": h.get("source"), "label": h.get("label") or "",
+            "policy": h.get("policy"), "day": h.get("day"), "start": h.get("start"), "hours": num("hours"),
+            "speed": num("speed"), "seed": num("seed"), "reposition": h.get("reposition") == "True",
+            "progress": num("progress"), "sim_time": h.get("sim_time"), "requested": num("requested"),
+            "requests": num("requests"), "metrics": m}
+
+
+@app.post("/runs", status_code=202)
+async def create_run(req: RunRequest) -> dict:
+    r: aioredis.Redis = app.state.r
+    if await r.llen(LAB_QUEUE) >= LAB_MAX_QUEUED:
+        raise HTTPException(429, f"{LAB_MAX_QUEUED} runs already queued; wait for one to finish")
+    rid = uuid.uuid4().hex[:10]
+    body = req.model_dump(mode="json") | {"req": rid}
+    async with r.pipeline(transaction=True) as pipe:
+        pipe.hset(f"lab:req:{rid}", mapping={"status": "queued", "request": json.dumps(body), "queued": int(time.time())})
+        pipe.expire(f"lab:req:{rid}", 7 * 86_400)
+        pipe.rpush(LAB_QUEUE, json.dumps(body))
+        pipe.llen(LAB_QUEUE)
+        res = await pipe.execute()
+    return {"request_id": rid, "position": res[-1] - 1 + (1 if await r.exists(LAB_ACTIVE) else 0)}
+
+
+async def _request_view(r: aioredis.Redis, rid: str) -> dict | None:
+    h = await r.hgetall(f"lab:req:{rid}")
+    if not h:
+        return None
+    out = {"request_id": rid, "status": h.get("status"), "request": json.loads(h.get("request") or "{}"),
+           "error": h.get("error"), "run": None}
+    if h.get("run_id"):
+        out["run"] = _run_view(h["run_id"], await r.hgetall(f"run:{h['run_id']}"))
+    return out
+
+
+@app.get("/runs")
+async def list_runs(limit: int = 100) -> dict:
+    r: aioredis.Redis = app.state.r
+    ids = await r.zrevrange(RUNS_INDEX, 0, max(1, min(limit, 500)) - 1)
+    async with r.pipeline(transaction=False) as pipe:
+        for i in ids:
+            pipe.hgetall(f"run:{i}")
+        hashes = await pipe.execute()
+    active = await r.get(LAB_ACTIVE)
+    queued = [json.loads(x)["req"] for x in await r.lrange(LAB_QUEUE, 0, -1)]
+    pending = [v for v in [await _request_view(r, q) for q in ([active] if active else []) + queued]
+               if v and v["status"] in ("queued", "running")]
+    return {"runs": [_run_view(i, h) for i, h in zip(ids, hashes) if h], "pending": pending}
+
+
+@app.get("/runs/{run_id}")
+async def get_run(run_id: str) -> dict:
+    r: aioredis.Redis = app.state.r
+    req = await _request_view(r, run_id)
+    if req:
+        return req
+    h = await r.hgetall(f"run:{run_id}")
+    if not h:
+        raise HTTPException(404, "no such run or request")
+    return _run_view(run_id, h)
+
+
+@app.post("/runs/{run_id}/cancel")
+async def cancel_run(run_id: str) -> dict:
+    """A queued request is skipped; a running replay stops at its next progress tick (~2 s)."""
+    r: aioredis.Redis = app.state.r
+    req = await r.hgetall(f"lab:req:{run_id}")
+    if req.get("status") == "queued":
+        await r.hset(f"lab:req:{run_id}", "status", "cancelled")
+        return {"cancelled": run_id, "was": "queued"}
+    target = req.get("run_id") if req else run_id
+    if not target or (await r.hget(f"run:{target}", "status")) != "running":
+        raise HTTPException(409, "nothing running or queued under that id")
+    await r.set(f"run:{target}:cancel", 1, ex=3600)
+    return {"cancelled": target, "was": "running"}
 
 
 @app.get("/rides/{ride_id}")

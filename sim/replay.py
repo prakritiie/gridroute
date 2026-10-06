@@ -74,6 +74,7 @@ class Replay:
         self.run_id = f"{a.day}-{a.start.replace(':', '')}-{self.label}-s{a.seed}-{int(time.time())}"
         self.pending: set[asyncio.Task] = set()
         self.stop = False
+        self.cancelled = False
 
     # ---- clock ---------------------------------------------------------------
     def sim_now(self) -> float:
@@ -224,6 +225,13 @@ class Replay:
                 await self.tx.ws.send(json.dumps({"type": "pings", "pings": [
                     [d.id, round(d.lat, 6), round(d.lng, 6), d.seq, t_ms] for d in due]}))
 
+            if tick % 4 == 0:                                   # progress for the policy lab, every 2 s
+                self.r.hset(f"run:{self.run_id}", mapping={
+                    "sim_time": self.sim_dt(now).isoformat(timespec="seconds"),
+                    "progress": round(min(1.0, now / (span + drain)), 4),
+                    "requested": len(self.rides)})
+                if self.r.exists(f"run:{self.run_id}:cancel"):
+                    self.cancelled = self.stop = True
             if time.time() - last_report >= 10:
                 last_report = time.time()
                 busy = sum(d.mode != IDLE for d in self.fleet.drivers.values())
@@ -245,9 +253,10 @@ class Replay:
         await self.tx.close()
         await self.http.aclose()
         await self.http_gw.aclose()
-        self.r.hset(f"run:{self.run_id}", mapping={"status": "done"})
+        self.r.hset(f"run:{self.run_id}", mapping={"status": "cancelled" if self.cancelled else "done"})
         self.r.delete("config:max_attempts", "config:policy", "config:reposition", "config:demand_scale", clock.KEY)
-        out = record(self.r, self.run_id, start_id, end_id, self.rides, cfg, config.DATA_DIR / "runs")
+        out = record(self.r, self.run_id, start_id, end_id, self.rides, cfg,
+                     Path(a.runs_dir) if getattr(a, "runs_dir", None) else config.DATA_DIR / "runs")
         print(f"recorded {out}", flush=True)
         return self.run_id
 

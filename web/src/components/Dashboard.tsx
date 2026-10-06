@@ -4,11 +4,14 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 
 import type { HoverInfo } from "./HexMap";
+import { Compare } from "./Compare";
 import { ExplainPanel } from "./ExplainPanel";
+import { LabPanel, MAX_COMPARE } from "./LabPanel";
 import { Legend, Offline } from "./MapOverlays";
 import { MatchFeed } from "./MatchFeed";
 import { Sidebar } from "./Sidebar";
-import { TopBar } from "./TopBar";
+import { TopBar, type View } from "./TopBar";
+import { useRuns } from "@/lib/lab";
 import { num } from "@/lib/format";
 import { domainMax, imbalance, type Layer } from "@/lib/palette";
 import type { Cell, Explain, Resolution } from "@/lib/types";
@@ -19,6 +22,12 @@ const HexMap = dynamic(() => import("./HexMap"), { ssr: false, loading: () => <d
 
 export default function Dashboard() {
   const ops = useOps();
+  const [view, setView] = useState<View>("live");
+  const lab = useRuns(view === "lab");
+  const [compare, setCompare] = useState<string[]>([]);
+  const toggleCompare = (id: string) => setCompare((c) =>
+    c.includes(id) ? c.filter((x) => x !== id) : c.length >= MAX_COMPARE ? c : [...c, id]);
+  const compared = compare.map((id) => lab.runs.find((r) => r.id === id)).filter((r) => r !== undefined);
   const [layer, setLayer] = useState<Layer>("supply");
   const [res, setRes] = useState<Resolution>(9);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -71,14 +80,19 @@ export default function Dashboard() {
 
   return (
     <div className="app">
-      <TopBar link={ops.link} t={ops.hexes?.t ?? null} layer={layer} res={res} onRes={changeRes}
+      <TopBar view={view} onView={setView} link={ops.link} t={ops.hexes?.t ?? null} layer={layer} res={res} onRes={changeRes}
         onLayer={(l) => { setLayer(l); setSelectedId(null); setHover(null); }} />
 
-      <Sidebar kpis={ops.kpis} history={ops.history} cell={selected} cells={cells} layer={layer}
+      {view === "lab" ? (
+        <aside className="sidebar" aria-label="Policy lab">
+          <LabPanel runs={lab.runs} pending={lab.pending} error={lab.error} selected={compare}
+            onToggle={toggleCompare} onStart={lab.start} onCancel={lab.cancel} />
+        </aside>
+      ) : <Sidebar kpis={ops.kpis} history={ops.history} cell={selected} cells={cells} layer={layer}
         res={forecasting ? 7 : res} forecast={ops.forecast} forecastByHex={forecastByHex} reposition={ops.reposition}
         onPick={(c) => setSelectedId(c[0])} onClose={() => setSelectedId(null)}
         top={explainId ? <ExplainPanel explain={shown?.data ?? null} error={shown?.error ?? null}
-          onClose={() => setExplainId(null)} /> : null} />
+          onClose={() => setExplainId(null)} /> : null} />}
 
       <main className="map" aria-label="Live map">
         <HexMap
@@ -110,6 +124,17 @@ export default function Dashboard() {
             No forecast yet. It appears once a demand model is published and the history is seeded
             (<code>python -m tools.seed_demand</code>), and during every replay.
           </div>
+        )}
+        {view === "lab" && lab.pending.some((p) => p.status === "running") && (
+          <div className="map__notice map__notice--live" role="status">
+            <span className="live__dot" aria-hidden />
+            Replaying {lab.pending.find((p) => p.status === "running")?.run?.sim_time?.slice(11, 16) ?? ""} on
+            {" "}{lab.pending.find((p) => p.status === "running")?.request.day.slice(8)} June 2016. The map shows the experiment.
+          </div>
+        )}
+        {view === "lab" && compared.length > 0 && (
+          <Compare runs={compared} onRemove={(id) => setCompare((c) => c.filter((x) => x !== id))}
+            onClear={() => setCompare([])} />
         )}
         {ops.link !== "live" && !ops.hexes && <Offline url={GATEWAY_WS} />}
       </main>

@@ -13,8 +13,10 @@ import os
 import time
 
 import httpx
+import redis
 import numpy as np
 
+from core import config
 from sim import points
 
 TRIPS = points.load_trips()
@@ -35,8 +37,15 @@ async def run(a: argparse.Namespace) -> None:
     last_report = start
     async with httpx.AsyncClient(base_url=a.gateway, timeout=5) as client:
         print(f"riders: ~{a.rate}/s -> {a.gateway}/rides")
+        paused_by = redis.Redis.from_url(a.redis_url, decode_responses=True)
         while not a.duration or time.monotonic() - start < a.duration:
             t0 = time.monotonic()
+            try:
+                if paused_by.exists("demo:paused"):                 # a policy-lab replay owns the city
+                    await asyncio.sleep(1.0)
+                    continue
+            except redis.RedisError:
+                pass
             reqs = make_requests(rng, int(rng.poisson(a.rate)))
             results = await asyncio.gather(*(client.post("/rides", json=b) for b in reqs), return_exceptions=True)
             for res in results:
@@ -56,6 +65,7 @@ def main() -> None:
     ap.add_argument("--rate", type=float, default=5.0, help="mean ride requests per second")
     ap.add_argument("--duration", type=float, default=0)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--redis-url", default=config.REDIS_URL)
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_HTTP", "http://localhost:8000"))
     asyncio.run(run(ap.parse_args()))
 

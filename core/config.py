@@ -9,6 +9,8 @@ def _int(name: str, default: int) -> int:
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 OSRM_URL = os.environ.get("OSRM_URL", "http://localhost:5001")
+GATEWAY_HTTP = os.environ.get("GATEWAY_HTTP", "http://localhost:8000")
+GATEWAY_WS = os.environ.get("GATEWAY_WS", "ws://localhost:8000/ws/driver")
 
 # Trip data and derived Parquet (GBs). Point outside synced folders like OneDrive.
 DATA_DIR = Path(os.environ.get("GRIDROUTE_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))

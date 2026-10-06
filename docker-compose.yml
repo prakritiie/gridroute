@@ -61,6 +61,26 @@ services:
     <<: *app
     command: ["python", "-m", "workers.repositioner"]   # idle unless config:reposition=1 (replay --reposition)
 
+  runner:                            # policy lab: runs the replays POST /runs queues, one at a time
+    <<: *app
+    command: ["python", "-m", "workers.runner"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      METRICS_PORT: "9100"
+      GRIDROUTE_DATA_DIR: /data
+      OSRM_URL: http://osrm:5000
+      GATEWAY_HTTP: http://gateway:8000
+      GATEWAY_WS: ws://gateway:8000/ws/driver
+    volumes:
+      # Trips (clean/), demand counts (features/) and recorded runs (runs/, lab/). Set GRIDROUTE_DATA_DIR in
+      # .env or the shell to the folder `python -m data.download` filled; defaults to ./data in the repo.
+      - ${GRIDROUTE_DATA_DIR:-./data}:/data
+    depends_on:
+      gateway:
+        condition: service_healthy
+      osrm:
+        condition: service_started
+
   sim:
     <<: *app
     command: ["python", "-m", "sim.live", "--drivers", "${SIM_DRIVERS:-5000}"]
@@ -79,6 +99,7 @@ services:
     command: ["python", "-m", "sim.riders", "--rate", "${RIDE_RATE:-3}"]   # ~58% fleet utilisation with real-street trip times
     environment:
       GATEWAY_HTTP: http://gateway:8000
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       gateway:
         condition: service_healthy

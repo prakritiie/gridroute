@@ -11,7 +11,7 @@ scrape_configs:
 
   - job_name: workers
     dns_sd_configs:
-      - names: [ingest, matcher, reaper, aggregator, forecaster, repositioner]
+      - names: [ingest, matcher, reaper, aggregator, forecaster, repositioner, runner]
         type: A
         port: 9100
         refresh_interval: 15s
