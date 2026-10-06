@@ -58,9 +58,11 @@ interface Props {
   onHover: (h: HoverInfo | null) => void;
   focus?: [number, number] | null;
   reposition?: Reposition | null;
+  /** chaos target: res-7 cells to outline */
+  area?: string[] | null;
 }
 
-export default function HexMap({ cells, layer, max, matches, selected, onSelect, onHover, focus, reposition }: Props) {
+export default function HexMap({ cells, layer, max, matches, selected, onSelect, onHover, focus, reposition, area }: Props) {
   const [beforeId, setBeforeId] = useState<string | undefined>();
   const [now, setNow] = useState(() => Date.now());
 
@@ -122,6 +124,18 @@ export default function HexMap({ cells, layer, max, matches, selected, onSelect,
         getLineWidth: 2,
         ...under,
       }),
+      new H3HexagonLayer<string>({
+        id: "chaos-area",
+        data: area ?? [],
+        getHexagon: (h) => h,
+        filled: true,
+        getFillColor: [229, 72, 77, 28],
+        stroked: true,
+        getLineColor: [229, 72, 77, 200],
+        lineWidthUnits: "pixels",
+        getLineWidth: 1.5,
+        ...under,
+      }),
       new LineLayer<Flow>({
         id: "reposition",                  // the last repositioner cycle: idle drivers sent to a shortage
         data: repFlows,
@@ -166,7 +180,7 @@ export default function HexMap({ cells, layer, max, matches, selected, onSelect,
         updateTriggers: { getRadius: now, getFillColor: now, getLineColor: now },
       }),
     ];
-  }, [visible, layer, max, matches, now, selected, beforeId, focus, reposition]);
+  }, [visible, layer, max, matches, now, selected, beforeId, focus, reposition, area]);
 
   return (
     <Map

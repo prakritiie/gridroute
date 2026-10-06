@@ -4,6 +4,9 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 
 import type { HoverInfo } from "./HexMap";
+import { cellToParent, getResolution, gridDisk } from "h3-js";
+
+import { ChaosPanel } from "./ChaosPanel";
 import { Compare } from "./Compare";
 import { ExplainPanel } from "./ExplainPanel";
 import { LabPanel, MAX_COMPARE } from "./LabPanel";
@@ -72,6 +75,15 @@ export default function Dashboard() {
     if (cells.length) setMax({ key, value: wanted });
   }
 
+  // Chaos target outline: the selected hex's res-7 parent and its ring, else the last command's area
+  const chaosArea = useMemo(() => {
+    if (selectedId && getResolution(selectedId) >= 7) {
+      const p = getResolution(selectedId) === 7 ? selectedId : cellToParent(selectedId, 7);
+      return gridDisk(p, 1);
+    }
+    return ops.chaos?.area ?? null;
+  }, [selectedId, ops.chaos]);
+
   const changeRes = (r: Resolution) => {
     setRes(r);
     setSelectedId(null);
@@ -92,7 +104,9 @@ export default function Dashboard() {
         res={forecasting ? 7 : res} forecast={ops.forecast} forecastByHex={forecastByHex} reposition={ops.reposition}
         onPick={(c) => setSelectedId(c[0])} onClose={() => setSelectedId(null)}
         top={explainId ? <ExplainPanel explain={shown?.data ?? null} error={shown?.error ?? null}
-          onClose={() => setExplainId(null)} /> : null} />}
+          onClose={() => setExplainId(null)} />
+          : view === "chaos" ? <ChaosPanel selected={selectedId} last={ops.chaos} history={ops.history} kpis={ops.kpis} />
+            : null} />}
 
       <main className="map" aria-label="Live map">
         <HexMap
@@ -105,6 +119,7 @@ export default function Dashboard() {
           onHover={setHover}
           focus={shown?.data?.pickup ?? null}
           reposition={ops.reposition}
+          area={view === "chaos" ? chaosArea : null}
         />
         {hover && hovered && (
           <div className="tooltip" style={{ left: hover.x, top: hover.y }}>

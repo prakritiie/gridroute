@@ -137,6 +137,7 @@ class Aggregator:
             "eta_p90_s": etas[int(len(etas) * 0.9)] if etas else None,
             "queue_rides": lag["match"],
             "queue_pings": lag["ingest"],
+            "pings_stale_total": int(self.r.get("stats:pings_stale") or 0),
             "double_bookings": self.fleet["double_bookings"],
             "invariant_violations": self.fleet["violations"],
             "audited_at": self.fleet["audited_at"],

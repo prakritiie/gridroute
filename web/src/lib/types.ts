@@ -23,6 +23,8 @@ export interface Kpis {
   eta_p90_s: number | null;
   queue_rides: number;
   queue_pings: number;
+  /** out-of-order pings ingest dropped since the stack started (chaos: reorder) */
+  pings_stale_total?: number;
   double_bookings: number;
   invariant_violations: number;
   audited_at: number | null;
@@ -39,6 +41,15 @@ export interface Match {
 }
 
 export type Link = "connecting" | "live" | "reconnecting";
+
+/** A chaos command as the gateway stored it (core/chaos.py). area: res-7 cells, null = whole city. */
+export interface ChaosCommand {
+  type: "kill" | "burst" | "reorder" | "heal";
+  area: string[] | null;
+  pct: number;
+  duration_s: number;
+  t: number;
+}
 
 /** forecast:snapshot — workers/forecaster.py. hexes are full-city units; multiply by scale for this run. */
 export interface Forecast {

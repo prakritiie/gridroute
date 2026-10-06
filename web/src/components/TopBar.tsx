@@ -11,7 +11,7 @@ const LAYERS: { id: Layer; label: string }[] = [
   { id: "forecast", label: "Forecast" },
 ];
 
-export type View = "live" | "lab";
+export type View = "live" | "lab" | "chaos";
 
 const RES_HINT: Record<Resolution, string> = { 9: "0.1 km²", 8: "0.7 km²", 7: "5.2 km²" };
 
@@ -35,7 +35,7 @@ export function TopBar({ view, onView, link, t, layer, onLayer, res, onRes }: Pr
         <span className="brand__name">GridRoute</span>
         <span className="brand__sep" aria-hidden />
         <nav className="views" aria-label="View">
-          {([["live", "Live"], ["lab", "Policy lab"]] as [View, string][]).map(([v, label]) => (
+          {([["live", "Live"], ["lab", "Policy lab"], ["chaos", "Chaos"]] as [View, string][]).map(([v, label]) => (
             <button key={v} className={view === v ? "is-active" : ""} aria-current={view === v ? "page" : undefined}
               onClick={() => onView(v)}>{label}</button>
           ))}

@@ -10,7 +10,7 @@ WS /ws/driver   up:   {"type":"register","driver_ids":[..]}
                       {"type":"accept_ack","driver_id","ride_id","ok"}       ok=false: the offer lapsed
                       {"type":"trip_done_ack","ride_id","ok"}
                       {"type":"reposition","driver_id","target":[lat,lng],"to"}   drive there if still idle
-WS /ws/ops      down: {"type":"hexes"|"kpis"|"match"|"forecast"|"reposition","data":...}; on connect the recent matches and the
+WS /ws/ops      down: {"type":"hexes"|"kpis"|"match"|"forecast"|"reposition"|"chaos","data":...}; on connect the recent matches and the
                       latest kpis and hexes are sent first. Each client has a bounded queue: a slow
                       browser drops frames instead of slowing everyone else.
 POST /rides     {lat,lng[,dropoff_lat,dropoff_lng]} -> 202 {ride_id}
@@ -18,6 +18,7 @@ GET  /rides/{id}, GET /rides/{id}/explain, GET /hexes?res=9|8|7, GET /kpis, GET 
 POST /runs      policy lab: queue a replay {day, start, hours, speed, matching, cost, reposition, seed, label?}
 GET  /runs      recorded runs (protocol + lab) with metrics, plus the active and queued requests
 GET  /runs/{id} one run or request; POST /runs/{id}/cancel
+POST /chaos     {type: kill|burst|reorder|heal, hex?, pct?, duration_s?} on the live demo (core/chaos.py)
 """
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from core import config, metrics
+from core import chaos, config, metrics
 from core.config import LAT_MAX, LAT_MIN, LNG_MAX, LNG_MIN
 from core.scripts import AsyncScripts, ride_key
 
@@ -48,6 +49,7 @@ log = logging.getLogger("gateway")
 PINGS, RIDES, EVENTS = "stream:pings", "stream:rides", "stream:events"
 OFFERS, HEXES, KPIS = "ch:offers", "ch:hexes", "ch:kpis"
 FORECAST, REPOSITION = "ch:forecast", "ch:reposition"
+CHAOS_CH = "ch:chaos"
 RIDE_TTL_S = 24 * 3600
 OPS_QUEUE = 8           # frames buffered per dashboard client before the oldest is dropped
 RECENT_MATCHES = 40
@@ -108,7 +110,7 @@ def _frame(kind: str, data: str) -> str:
 
 async def _fan_out(r: aioredis.Redis, sockets: DriverSockets, ops: OpsHub) -> None:
     pubsub = r.pubsub()
-    await pubsub.subscribe(OFFERS, HEXES, KPIS, FORECAST, REPOSITION)
+    await pubsub.subscribe(OFFERS, HEXES, KPIS, FORECAST, REPOSITION, CHAOS_CH)
     try:
         async for m in pubsub.listen():
             if m["type"] != "message":
@@ -126,6 +128,8 @@ async def _fan_out(r: aioredis.Redis, sockets: DriverSockets, ops: OpsHub) -> No
                 ops.broadcast(_frame("kpis", data))
             elif channel == FORECAST:
                 ops.broadcast(_frame("forecast", data))
+            elif channel == CHAOS_CH:
+                ops.broadcast(_frame("chaos", data))
             elif channel == REPOSITION:
                 with contextlib.suppress(ValueError):
                     batch = json.loads(data)
@@ -307,6 +311,33 @@ async def cancel_run(run_id: str) -> dict:
     return {"cancelled": target, "was": "running"}
 
 
+# ---- chaos -------------------------------------------------------------------
+class ChaosRequest(BaseModel):
+    type: Literal["kill", "burst", "reorder", "heal"]
+    hex: str | None = Field(None, max_length=20)
+    pct: float = Field(0.3, ge=0.05, le=1.0)
+    duration_s: float = Field(120, ge=10, le=600)
+
+
+@app.post("/chaos", status_code=202)
+async def create_chaos(req: ChaosRequest) -> dict:
+    r: aioredis.Redis = app.state.r
+    if await r.exists("demo:paused"):
+        raise HTTPException(409, "a policy-lab replay owns the city; chaos acts on the live demo")
+    try:
+        cmd = chaos.command(req.type, req.hex, req.pct, req.duration_s)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    body = json.dumps(cmd, separators=(",", ":"))
+    async with r.pipeline(transaction=True) as pipe:
+        pipe.xadd(chaos.STREAM, {"cmd": body}, maxlen=1000, approximate=True)
+        pipe.xadd(EVENTS, {"type": "chaos", "kind": req.type, "t": cmd["t"]}, maxlen=1_000_000, approximate=True)
+        pipe.set("chaos:last", body, ex=3600)
+        pipe.publish(CHAOS_CH, body)
+        await pipe.execute()
+    return cmd
+
+
 @app.get("/rides/{ride_id}")
 async def get_ride(ride_id: str) -> dict:
     ride = await app.state.r.hgetall(ride_key(ride_id))
@@ -420,7 +451,7 @@ async def ops_socket(ws: WebSocket) -> None:
     q: asyncio.Queue = asyncio.Queue(maxsize=OPS_QUEUE)
     ops.clients.add(q)                                  # subscribe before reading state: no gap to lose frames in
     metrics.ops_sockets.inc()
-    snap, k, fc = await app.state.r.mget("hexes:snapshot", "kpis:latest", "forecast:snapshot")
+    snap, k, fc, ch = await app.state.r.mget("hexes:snapshot", "kpis:latest", "forecast:snapshot", "chaos:last")
     for frame in list(ops.recent):
         await ws.send_text(frame)
     if k:
@@ -429,6 +460,8 @@ async def ops_socket(ws: WebSocket) -> None:
         await ws.send_text(_frame("hexes", snap))
     if fc:
         await ws.send_text(_frame("forecast", fc))
+    if ch:
+        await ws.send_text(_frame("chaos", ch))
 
     async def wait_closed() -> None:                    # the dashboard never sends; this notices it leaving
         with contextlib.suppress(WebSocketDisconnect, RuntimeError):

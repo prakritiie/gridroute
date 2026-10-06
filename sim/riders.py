@@ -16,7 +16,7 @@ import httpx
 import redis
 import numpy as np
 
-from core import config
+from core import chaos, config
 from sim import points
 
 TRIPS = points.load_trips()
@@ -30,6 +30,42 @@ def make_requests(rng: np.random.Generator, k: int, trips: np.ndarray | None = N
             for t in trips[rng.integers(len(trips), size=k)]]
 
 
+class Burst:
+    """Chaos burst: x BURST_FACTOR requests for a while, from real trips that start in the area."""
+
+    def __init__(self):
+        self.cursor = "$"
+        self.until = 0.0
+        self.pool: np.ndarray | None = None
+
+    def poll(self, r: redis.Redis) -> None:
+        try:
+            if self.cursor == "$":
+                last = r.xrevrange(chaos.STREAM, count=1)
+                self.cursor = last[0][0] if last else "0-0"
+            got = r.xread({chaos.STREAM: self.cursor}, count=20) or []
+        except redis.RedisError:
+            return
+        for _, entries in got:
+            for entry_id, fields in entries:
+                self.cursor = entry_id
+                cmd = chaos.parse(fields)
+                if cmd["type"] == "heal":
+                    self.until, self.pool = 0.0, None
+                elif cmd["type"] == "burst":
+                    area = set(cmd["area"]) if cmd.get("area") else None
+                    pool = TRIPS if area is None else TRIPS[[chaos.in_area(t[0], t[1], area) for t in TRIPS]]
+                    self.pool = pool if len(pool) else TRIPS
+                    self.until = time.monotonic() + cmd["duration_s"]
+                    print(f"riders: burst x{chaos.BURST_FACTOR} for {cmd['duration_s']:.0f}s "
+                          f"from {len(self.pool):,} trips", flush=True)
+
+    def now(self, rate: float) -> tuple[float, np.ndarray | None]:
+        if time.monotonic() < self.until:
+            return rate * chaos.BURST_FACTOR, self.pool
+        return rate, None
+
+
 async def run(a: argparse.Namespace) -> None:
     rng = np.random.default_rng(a.seed)
     start = time.monotonic()
@@ -38,6 +74,7 @@ async def run(a: argparse.Namespace) -> None:
     async with httpx.AsyncClient(base_url=a.gateway, timeout=5) as client:
         print(f"riders: ~{a.rate}/s -> {a.gateway}/rides")
         paused_by = redis.Redis.from_url(a.redis_url, decode_responses=True)
+        burst = Burst()
         while not a.duration or time.monotonic() - start < a.duration:
             t0 = time.monotonic()
             try:
@@ -46,7 +83,9 @@ async def run(a: argparse.Namespace) -> None:
                     continue
             except redis.RedisError:
                 pass
-            reqs = make_requests(rng, int(rng.poisson(a.rate)))
+            burst.poll(paused_by)
+            rate, pool = burst.now(a.rate)
+            reqs = make_requests(rng, int(rng.poisson(rate)), pool)
             results = await asyncio.gather(*(client.post("/rides", json=b) for b in reqs), return_exceptions=True)
             for res in results:
                 if isinstance(res, Exception) or res.status_code != 202:

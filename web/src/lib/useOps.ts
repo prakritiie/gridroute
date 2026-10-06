@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Forecast, HexSnapshot, Kpis, Link, Match, Reposition } from "./types";
+import type { ChaosCommand, Forecast, HexSnapshot, Kpis, Link, Match, Reposition } from "./types";
 
 // 127.0.0.1, not localhost: on Windows, WSL can hold [::1]:8000 and a browser that tries IPv6 first hangs there.
 export const GATEWAY_WS = process.env.NEXT_PUBLIC_GATEWAY_WS ?? "ws://127.0.0.1:8000/ws/ops";
@@ -18,13 +18,14 @@ export interface OpsState {
   matches: Match[];
   forecast: Forecast | null;
   reposition: Reposition | null;
+  chaos: ChaosCommand | null;
 }
 
 /** Live feed from the gateway's /ws/ops. Reconnects with capped backoff; never throws into the UI. */
 export function useOps(url: string = GATEWAY_WS): OpsState {
   const [state, setState] = useState<OpsState>({
     link: "connecting", everConnected: false, hexes: null, kpis: null, history: [], matches: [],
-    forecast: null, reposition: null,
+    forecast: null, reposition: null, chaos: null,
   });
   const retry = useRef(0);
 
@@ -56,6 +57,8 @@ export function useOps(url: string = GATEWAY_WS): OpsState {
           setState((s) => ({ ...s, matches: [m, ...s.matches].slice(0, MATCH_LOG) }));
         } else if (msg.type === "forecast") {
           setState((s) => ({ ...s, forecast: msg.data as Forecast }));
+        } else if (msg.type === "chaos") {
+          setState((s) => ({ ...s, chaos: msg.data as ChaosCommand }));
         } else if (msg.type === "reposition") {
           setState((s) => ({ ...s, reposition: { ...(msg.data as Omit<Reposition, "at">), at: Date.now() } }));
         }

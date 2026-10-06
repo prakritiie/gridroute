@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import os
+import random
 import signal
 import time
 from pathlib import Path
@@ -22,6 +23,9 @@ import httpx
 import numpy as np
 
 from core import config, osrm
+from core.chaos import STREAM as CHAOS_STREAM
+from core.chaos import FleetChaos
+from core.chaos import parse as parse_chaos
 from sim import points
 from sim.agents import IDLE, Fleet, Leg, straight_route
 from core.clock import nyc_now
@@ -49,7 +53,12 @@ class Live:
         self.dropoff: dict[str, tuple[float, float]] = {}
         self.cruise_pending: set[str] = set()      # idle drivers whose cruise route is being fetched
         self.suspects: dict[str, str] = {}          # driver -> mismatch seen on the last reconcile pass
-        self.dead: set[str] = set()
+        self.dead: set[str] = set()              # silent drivers: --kill-after plus live chaos
+        self.killed: set[str] = set()            # --kill-after (for good)
+        self.chaos = FleetChaos()
+        self.chaos_rng = random.Random(7)
+        self.chaos_cursor = "$"
+        self.last_sent: dict[str, tuple[float, float, int]] = {}   # driver -> last ping (lat, lng, seq)
         self.pending: set[asyncio.Task] = set()
         self.stop = False
 
@@ -92,6 +101,32 @@ class Live:
             else:
                 todo.append((d, ride, "pickup", (float(plat), float(plng))))
         return todo
+
+    def poll_chaos(self, r) -> None:
+        """Apply new chaos commands from the gateway and end the ones that ran their course."""
+        try:
+            if self.chaos_cursor == "$":                      # start after whatever was sent before we started
+                last = r.xrevrange(CHAOS_STREAM, count=1)
+                self.chaos_cursor = last[0][0] if last else "0-0"
+            got = r.xread({CHAOS_STREAM: self.chaos_cursor}, count=20) or []
+        except Exception as e:  # noqa: BLE001 - chaos is optional; never break the demo over it
+            print(f"live: chaos stream unreadable ({e})", flush=True)
+            got = []
+        for _, entries in got:
+            for entry_id, fields in entries:
+                self.chaos_cursor = entry_id
+                cmd = parse_chaos(fields)
+                positions = {d.id: (d.lat, d.lng) for d in self.fleet.drivers.values()
+                             if d.id not in self.killed and d.id not in self.chaos.dead}
+                hit = self.chaos.apply(cmd, positions, self.chaos_rng)
+                if cmd["type"] == "burst":
+                    continue                                  # the riders' business
+                print(f"live: chaos {cmd['type']}: {len(hit):,} drivers"
+                      f"{' in ' + str(len(cmd['area'])) + ' hexes' if cmd.get('area') else ''}", flush=True)
+        back = self.chaos.expire()
+        if back:
+            print(f"live: {len(back):,} silenced drivers are back", flush=True)
+        self.dead = self.killed | self.chaos.dead
 
     def drop_everything(self) -> None:
         """After a pause the server state was reset: forget every ride and leg, keep positions."""
@@ -215,8 +250,11 @@ class Live:
                 break
             if a.kill_after and not self.dead and time.time() - self.wall0 >= a.kill_after:
                 ids = list(self.fleet.drivers)
-                self.dead = set(self.rng.choice(ids, int(len(ids) * a.kill_frac), replace=False).tolist())
-                print(f"live: killed {len(self.dead):,} drivers (silent: no pings, no accepts)", flush=True)
+                self.killed = set(self.rng.choice(ids, int(len(ids) * a.kill_frac), replace=False).tolist())
+                self.dead = self.killed | self.chaos.dead
+                print(f"live: killed {len(self.killed):,} drivers (silent: no pings, no accepts)", flush=True)
+            if tick % 2 == 0:
+                self.poll_chaos(rcon)
             now = self.sim_now()
 
             # offers: accept, then drive to the pickup over the road
@@ -271,8 +309,13 @@ class Live:
             due = [d for d in self.fleet.due_pings(tick, PING_EVERY) if d.id not in self.dead]
             if due and self.tx.up:
                 t_ms = int(time.time() * 1000)
-                await self.tx.ws.send(json.dumps({"type": "pings", "pings": [
-                    [d.id, round(d.lat, 6), round(d.lng, 6), d.seq, t_ms] for d in due]}))
+                pings = [[d.id, round(d.lat, 6), round(d.lng, 6), d.seq, t_ms] for d in due]
+                if self.chaos.reorder:                  # chaos: the previous ping arrives after the new one
+                    pings += [[d.id, *self.last_sent[d.id][:2], self.last_sent[d.id][2], t_ms - 4000]
+                              for d in due if d.id in self.chaos.reorder and d.id in self.last_sent]
+                for d in due:
+                    self.last_sent[d.id] = (round(d.lat, 6), round(d.lng, 6), d.seq)
+                await self.tx.ws.send(json.dumps({"type": "pings", "pings": pings}))
 
             if time.time() - last >= 5:
                 ds = list(self.fleet.drivers.values())

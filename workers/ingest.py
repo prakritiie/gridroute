@@ -19,6 +19,7 @@ import h3
 import redis
 
 from core import config, metrics
+from core.chaos import STALE_KEY
 from core.config import LAT_MAX, LAT_MIN, LNG_MAX, LNG_MIN
 from core.scripts import Scripts
 
@@ -87,6 +88,7 @@ class Ingest:
             return 0
         now = int(time.time() * 1000)
         latest: dict[str, tuple] = {}
+        late = 0                                            # older than a ping already seen in this batch
         for _id, f in entries:
             try:
                 d, lat, lng, seq, t = f["d"], float(f["lat"]), float(f["lng"]), int(f["seq"]), int(f["t"])
@@ -100,6 +102,7 @@ class Ingest:
             if prev is not None:
                 self.stats.deduped += 1
                 if prev[3] >= seq:
+                    late += 1
                     continue
             latest[d] = (d, lat, lng, seq, t)
 
@@ -114,6 +117,8 @@ class Ingest:
         self.stats.lag_ms.extend(now - p[5] for p in pings)
         metrics.pings_ingested.inc(applied)
         metrics.pings_stale.inc(len(results) - applied)
+        if len(results) - applied + late:                  # every out-of-order ping dropped, for the chaos panel
+            self.r.incrby(STALE_KEY, len(results) - applied + late)
         for p in pings:
             metrics.ingest_lag.observe(now - p[5])
         self.r.xack(STREAM, GROUP, *[e[0] for e in entries])
