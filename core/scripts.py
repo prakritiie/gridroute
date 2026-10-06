@@ -45,6 +45,7 @@ class Scripts:
         self._unmatch = r.register_script((LUA_DIR / "unmatch_ride.lua").read_text())
         self._accept = r.register_script((LUA_DIR / "accept_offer.lua").read_text())
         self._expire = r.register_script((LUA_DIR / "expire_offer.lua").read_text())
+        self._expire_trip = r.register_script((LUA_DIR / "expire_trip.lua").read_text())
 
     def move_driver(self, driver_id: str, cell: str, lat: float, lng: float, seq: int, ts_ms: int) -> bool:
         """Apply a ping. False means it was stale/out-of-order and ignored."""
@@ -100,6 +101,10 @@ class Scripts:
             args=[driver_id, ride_id, now_ms],
         )
         return res == 1
+
+    def expire_trip(self, ride_id: str, now_ms: int) -> bool:
+        """Close an accepted trip whose driver no longer holds its lock. False if still held or not a trip."""
+        return self._expire_trip(keys=[ride_key(ride_id)], args=[ride_id, now_ms]) == 1
 
     def unmatch_ride(self, ride_id: str, now_ms: int) -> bool:
         return self._unmatch(keys=[ride_key(ride_id)], args=[now_ms]) == 1

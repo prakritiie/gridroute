@@ -133,3 +133,35 @@ def test_gateway_accept_message(client, r, s):
         assert ws.receive_json()["ok"] is False
     assert r.hget("ride:r1", "status") == "assigned"
     assert any(f["type"] == "accept" for _, f in r.xrange("stream:events"))
+
+
+def test_sweep_closes_rides_of_drivers_that_vanished(r, s):
+    """Regression (found live after a 16 h laptop sleep): driver hashes expire after 1 h of silence, the next
+    ping recreates the driver as fresh and available, and its accepted ride stayed 'assigned' forever."""
+    _driver(s, "d1")
+    _driver(s, "d2")
+    queue_ride(r, "trip")
+    queue_ride(r, "offer")
+    _offer(s, "d1", "trip")
+    assert s.accept_offer("d1", "trip", now_ms()) == 1
+    _offer(s, "d2", "offer")
+    # both drivers go silent long enough for their hashes and locks to expire
+    r.delete("driver:d1", "lock:driver:d1", "driver:d2", "lock:driver:d2")
+    reaper = Reaper(r)
+    reaper.step()
+    assert reaper.last_swept == 2
+    assert r.hget("ride:trip", "status") == "expired"
+    assert r.hget("ride:offer", "status") == "queued"                  # an offer goes back to the queue
+    assert not r.smembers("rides:open")
+    _driver(s, "d1", seq=99)                                            # the driver comes back later
+    assert r.hget("driver:d1", "status") == "available" and audit(r) == []
+
+
+def test_sweep_leaves_healthy_rides_alone(r, s):
+    _driver(s, "d1")
+    queue_ride(r, "r1")
+    _offer(s, "d1", "r1")
+    s.accept_offer("d1", "r1", now_ms())
+    reaper = Reaper(r)
+    reaper.step()
+    assert reaper.last_swept == 0 and r.hget("ride:r1", "status") == "assigned"

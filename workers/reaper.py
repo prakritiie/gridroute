@@ -28,6 +28,7 @@ class Reaper:
         self.scripts = Scripts(r)
         self.max_age_ms = max_age_ms
         self.last_requeued = 0
+        self.last_swept = 0
 
     def step(self, now_ms: int | None = None) -> int:
         now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
@@ -36,7 +37,34 @@ class Reaper:
         evicted = sum(self.scripts.reap_cells(cells[i:i + BATCH], cutoff) for i in range(0, len(cells), BATCH))
         metrics.drivers_evicted.inc(evicted)
         self.last_requeued = self.expire_offers(now_ms)
+        self.last_swept = self.sweep_open_rides(now_ms)
         return evicted
+
+    def sweep_open_rides(self, now_ms: int) -> int:
+        """Close open rides whose driver no longer holds the lock: lapsed offers are re-queued, abandoned trips
+        expired. The `offers` zset and move_driver.lua catch most of these; this catches a driver that never
+        pings again (its hash expired), which neither of them can see. Returns rides closed."""
+        ids = list(self.r.smembers("rides:open"))
+        if not ids:
+            return 0
+        pipe = self.r.pipeline(transaction=False)
+        for rid in ids:
+            pipe.hmget(f"ride:{rid}", "status", "driver")
+        rows = pipe.execute()
+        pipe = self.r.pipeline(transaction=False)
+        for _, d in rows:
+            pipe.get(f"lock:driver:{d}") if d else pipe.echo("")
+        locks = pipe.execute()
+        closed = 0
+        for rid, (status, d), lock in zip(ids, rows, locks):
+            if status is None or lock == rid:
+                continue                                    # healthy (or hash expired: handled by its TTL)
+            if status == "offered":
+                closed += self.scripts.expire_offer(rid, now_ms)
+            else:
+                closed += self.scripts.expire_trip(rid, now_ms)   # also tidies index drift
+        metrics.rides_swept.inc(closed)
+        return closed
 
     def expire_offers(self, now_ms: int) -> int:
         """Re-queue rides whose offer lease lapsed. Returns how many were re-queued."""
@@ -69,6 +97,8 @@ def main() -> None:
             print(f"reaper: evicted {n} silent drivers ({len(reaper.r.smembers('active_cells'))} active cells)")
         if reaper.last_requeued:
             print(f"reaper: re-queued {reaper.last_requeued} rides whose offer lapsed")
+        if reaper.last_swept:
+            print(f"reaper: closed {reaper.last_swept} open rides whose driver no longer holds them")
         time.sleep(max(0.0, a.interval - (time.monotonic() - t0)))
 
 

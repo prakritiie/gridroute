@@ -168,12 +168,35 @@ def test_cruise_counts_as_empty_and_an_offer_interrupts_it():
     assert kind == "cruise" and d.mode == IDLE and d.empty_m == 900 and d.leg is None
 
 
-def test_demo_points_are_real_nyc_locations():
-    from sim import points
+def test_demo_uses_real_trips():
     from core.config import LAT_MAX, LAT_MIN, LNG_MAX, LNG_MIN
-    pts = points.load()
-    assert len(pts) == 40_000
+    from core.osrm import _hav_m
+    from sim import points, riders
+    trips, pts = points.load_trips(), points.load()
+    assert trips.shape == (30_000, 4) and pts.shape == (60_000, 2)
     assert ((pts[:, 0] >= LAT_MIN) & (pts[:, 0] <= LAT_MAX) & (pts[:, 1] >= LNG_MIN) & (pts[:, 1] <= LNG_MAX)).all()
+    reqs = riders.make_requests(np.random.default_rng(0), 2000)
+    med = np.median([_hav_m((q["lat"], q["lng"]), (q["dropoff_lat"], q["dropoff_lng"])) for q in reqs])
+    assert 1500 < med < 3000                  # real trips (~2.1 km), not random pairs of points (~3.1 km)
+
+
+def test_live_demo_reconciles_with_the_server(r):
+    """Only a mismatch seen on two consecutive passes is acted on (an in-flight message never triggers it)."""
+    import argparse
+    from sim.live import Live
+    from sim.agents import ROUTING
+    lv = Live(argparse.Namespace(seed=0, drivers=3, id_prefix="d"))
+    for d in ("d0", "d1", "d2"):
+        r.hset(f"driver:{d}", mapping={"lat": 40.75, "lng": -73.98, "status": "available"})
+    lv.fleet.accept("d0", "gone")                          # demo thinks d0 is on a ride the server dropped
+    r.hset("driver:d1", mapping={"status": "assigned", "ride": "r1"})   # server: d1 holds r1, demo doesn't know
+    r.hset("ride:r1", mapping={"status": "assigned", "driver": "d1", "lat": 40.751, "lng": -73.981,
+                               "dlat": 40.77, "dlng": -73.96})
+    assert lv.reconcile(r) == ([], [])                     # first sighting: wait
+    dropped, todo = lv.reconcile(r)                        # second: act
+    assert dropped == [("d0", "gone")] and lv.fleet.drivers["d0"].mode == IDLE
+    assert [t[:3] for t in todo] == [("d1", "r1", "trip")] and lv.fleet.drivers["d1"].mode == ROUTING
+    assert lv.reconcile(r) == ([], [])                     # now in sync: nothing more to do
 
 
 def test_live_demo_resumes_trips_after_a_restart(r):

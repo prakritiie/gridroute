@@ -6,7 +6,8 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04           # pinned: ubuntu-latest moves to Ubuntu 26 on 19 Oct 2026
+    timeout-minutes: 20
     services:
       redis:
         image: redis:7-alpine
@@ -26,7 +27,8 @@ jobs:
       - run: pytest
 
   web:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: web

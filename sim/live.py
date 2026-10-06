@@ -33,6 +33,7 @@ PING_EVERY = 8                     # ticks: one ping per driver every 4 s
 CRUISE_P = 0.01                    # per idle driver per tick: a cruise starts every ~50 s on average
 CRUISE_M = (500, 3000)
 CONGESTION = Path(__file__).parent / "data" / "congestion_june.parquet"
+RECONCILE_S = 30
 
 
 class Live:
@@ -46,6 +47,7 @@ class Live:
         self.cong = Congestion.load(CONGESTION) if CONGESTION.exists() else None
         self.dropoff: dict[str, tuple[float, float]] = {}
         self.cruise_pending: set[str] = set()      # idle drivers whose cruise route is being fetched
+        self.suspects: dict[str, str] = {}          # driver -> mismatch seen on the last reconcile pass
         self.dead: set[str] = set()
         self.pending: set[asyncio.Task] = set()
         self.stop = False
@@ -61,7 +63,6 @@ class Live:
         pipe = r.pipeline(transaction=False)
         for d in ids:
             pipe.hmget(f"driver:{d}", "lat", "lng", "status", "ride")
-        todo = []
         rides = {}
         for d, (lat, lng, status, ride) in zip(ids, pipe.execute()):
             if lat is None:
@@ -70,6 +71,12 @@ class Live:
             drv.lat, drv.lng = float(lat), float(lng)
             if status == "assigned" and ride:
                 rides[d] = ride
+        return self._take_up(r, rides)
+
+    def _take_up(self, r, rides: dict[str, str]) -> list[tuple[str, str, str, tuple[float, float]]]:
+        """For drivers the server says hold a ride: an accepted trip drives on to its drop-off, a pending
+        offer is accepted and driven to the pickup. Returns the legs to start."""
+        todo = []
         pipe = r.pipeline(transaction=False)
         for d, ride in rides.items():
             pipe.hmget(f"ride:{ride}", "status", "driver", "lat", "lng", "dlat", "dlng")
@@ -84,6 +91,41 @@ class Live:
             else:
                 todo.append((d, ride, "pickup", (float(plat), float(plng))))
         return todo
+
+    def reconcile(self, r) -> tuple[list[tuple[str, str]], list[tuple[str, str, str, tuple[float, float]]]]:
+        """Sync with the server like a driver app does, every RECONCILE_S. Acts on a mismatch only when the
+        previous pass saw the same one (so an accept or trip_done still in flight never triggers it):
+          - busy here, but the server no longer gives this driver this ride   -> drop the ride
+          - idle here, but the server says the driver holds a ride             -> take it up
+        Found live: after a 16 h laptop sleep the demo and Redis disagreed for ~150 drivers.
+        Returns (cancelled (driver, ride) pairs, legs to start)."""
+        ids = list(self.fleet.drivers)
+        pipe = r.pipeline(transaction=False)
+        for d in ids:
+            pipe.hmget(f"driver:{d}", "status", "ride")
+        seen: dict[str, str] = {}
+        cancel, take = [], {}
+        for d, (status, ride) in zip(ids, pipe.execute()):
+            drv = self.fleet.drivers[d]
+            if d in self.dead:
+                continue
+            if drv.mode != IDLE and drv.ride_id and (status != "assigned" or ride != drv.ride_id):
+                sig = f"drop:{drv.ride_id}"
+            elif drv.mode == IDLE and status == "assigned" and ride:
+                sig = f"take:{ride}"
+            else:
+                continue
+            if self.suspects.get(d) == sig:
+                if sig.startswith("drop:"):
+                    cancel.append((d, drv.ride_id))
+                else:
+                    take[d] = ride
+            else:
+                seen[d] = sig
+        self.suspects = seen
+        for d, ride in cancel:
+            self.fleet.cancel(d, ride)
+        return cancel, self._take_up(r, take)
 
     def sim_now(self) -> float:
         return (time.time() - self.wall0) * self.a.speedup
@@ -127,9 +169,11 @@ class Live:
         print(f"live: {len(self.fleet.drivers):,} drivers on real streets via {a.osrm} "
               f"(congestion: {'June factors' if self.cong else 'flat 1.85x'}), x{a.speedup}", flush=True)
         self.wall0 = time.time()
+        import redis as _redis
+        rcon = _redis.Redis.from_url(a.redis_url, decode_responses=True)
+        last_sync = time.time()
         if a.resume:
-            import redis as _redis
-            todo = self.resume(_redis.Redis.from_url(a.redis_url, decode_responses=True))
+            todo = self.resume(rcon)
             for d, ride, kind, target in todo:
                 if kind == "pickup":
                     await self.tx.accept(d, ride)
@@ -178,6 +222,18 @@ class Live:
                         and self.rng.random() < CRUISE_P):
                     self.cruise_pending.add(d.id)
                     self.spawn(self.cruise(d.id))
+
+            if time.time() - last_sync >= RECONCILE_S:
+                last_sync = time.time()
+                dropped, todo = self.reconcile(rcon)
+                for d, ride, kind, target in todo:
+                    if kind == "pickup":
+                        await self.tx.accept(d, ride)
+                    drv = self.fleet.drivers[d]
+                    self.spawn(self.ride_leg(d, kind, ride, (drv.lat, drv.lng), target))
+                if dropped or todo:
+                    print(f"live: reconciled with the server: dropped {len(dropped)} rides, took up {len(todo)}",
+                          flush=True)
 
             due = [d for d in self.fleet.due_pings(tick, PING_EVERY) if d.id not in self.dead]
             if due and self.tx.up:
