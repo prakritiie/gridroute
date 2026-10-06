@@ -2,7 +2,8 @@
 
 Real-time ride dispatch on Uber's H3 hexagonal grid. Moving drivers are indexed into H3 cells in Redis,
 every multi-key write is an atomic Lua script, and riders are matched without ever double-booking a driver.
-Learned ETAs and demand forecasting (LightGBM, trained on real NYC 2016 trips) come next.
+On top of that core: a learned ETA and a 15-minute demand forecast (LightGBM, trained on GPU on 67M real NYC
+2016 trips), used to pick drivers and to send idle drivers to where riders are about to appear.
 
 Design and plan: [docs/implementation.md](docs/implementation.md).
 
@@ -48,6 +49,22 @@ never saw. Features come from one shared function used by training and the match
 RMSLE 0.301 (B3 0.416, raw OSRM 0.797). The model beats every baseline on every slice: distance, borough,
 airports and time of day.
 
+## Demand forecast (M3)
+
+How many requests will each ~5 km² hex (H3 res 7) get in the next 15 minutes? One global LightGBM with a
+Poisson objective over 84 hexes, trained Jan–Apr, early-stopped on May, tested on June. Features are lags
+(last slot, last hour, same slot yesterday and last week, 4-week average), hour of week and holidays, built by
+one shared function at training and serving time. [Model card](docs/model_card_demand.md).
+
+| June 2016, WAPE per (hex, 15 min) | Seasonal naive | 4-week average | **Model** |
+|---|---|---|---|
+| All hexes | 14.8% | 11.5% | **8.4%** |
+| Busy hexes (top 20%) | 13.3% | 10.2% | **7.2%** |
+
+Live, the aggregator counts requests per hex on the sim clock, the forecaster predicts each new slot, and the
+repositioner sends 20% of a hex's idle-driver surplus toward the neighbouring hex with the largest expected
+shortfall, every 2 sim-minutes. The dashboard's **Forecast** layer shows the forecast and the moves.
+
 ## Results: does better prediction make better dispatch? (C7)
 
 Real June 2016 demand replayed through the live system (Tue 7 Jun, 07:00–09:00, 20% of real requests, 1,600
@@ -60,7 +77,11 @@ which the ETA model never trains on. Each row changes one thing. Full protocol a
 | R0 | Greedy | Straight-line distance | 4:49 ± 0:07 | 8:02 ± 0:06 | 13.98 ± 1.50 | 1.77 ± 0.03 | 345 ms | n/a |
 | R1 | Greedy | ETA model | 4:45 ± 0:05 | 8:06 ± 0:07 | 12.67 ± 0.94 | 1.75 ± 0.03 | 219 ms | 1:24 |
 | R2 | Batch (Hungarian) | Straight-line distance | 4:25 ± 0:02 | 7:43 ± 0:04 | 14.12 ± 0.04 | 1.62 ± 0.02 | 102 ms | 2:41 |
-| **R3** | **Batch** | **ETA model** | **4:19 ± 0:06** | 7:47 ± 0:05 | 13.45 ± 0.73 | **1.59 ± 0.06** | 171 ms | **1:22** |
+| R3 | Batch | ETA model | 4:19 ± 0:06 | 7:47 ± 0:05 | 13.45 ± 0.73 | **1.59 ± 0.06** | 171 ms | **1:22** |
+| **R4** | **Batch + repositioning** | **ETA model** | **3:59 ± 0:12** | **7:28 ± 0:19** | **7.40 ± 0.38** | 1.97 ± 0.05 | 213 ms* | 1:27 |
+
+\* Two of three R4 seeds (216 and 210 ms); the third (1,120 ms) ran while the dashboard was being rebuilt on
+the same laptop and is reported in [docs/results.md](docs/results.md) as recorded.
 
 What this says, honestly:
 
@@ -72,8 +93,13 @@ What this says, honestly:
   line but 2 minutes away by Manhattan's one-way streets.
 - **The ETA halves the pickup-estimate error** the rider is shown (1:22 vs 2:41 for the distance heuristic),
   even where it doesn't change the driver.
-- **No matching policy fixes unmatched riders** (13–14% in every row). The failure is spatial: idle drivers wait
-  where their last trip ended. That is what row R4 (demand forecasting + repositioning) is for.
+- **No matching policy fixes unmatched riders** (13–14% in every row R0–R3). The failure is spatial: idle
+  drivers wait where their last trip ended, while riders appear elsewhere.
+- **Repositioning fixes most of it.** Moving idle drivers ahead of forecast demand (R4) nearly halves unmatched
+  riders (13.45% → 7.40%, about 390 more rides served per run) and cuts mean pickup by another 20 s. The cost is
+  empty driving: +0.38 km per driver-hour (+24%), almost all of it the repositioning drives themselves
+  (0.40 km/driver-h, ~1,000 moves per run). The median number of idle drivers in slots where riders went
+  unserved falls from ~610 to ~370.
 - **Known limit:** the model was trained on cleaned taxi trips, which exclude legs under 300 m / 60 s, so it
   predicts at least ~2 min even for a 10-second pickup leg. Training on pickup-like legs is the next model.
 
