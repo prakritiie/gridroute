@@ -40,6 +40,24 @@ export interface Match {
 
 export type Link = "connecting" | "live" | "reconnecting";
 
+/** forecast:snapshot — workers/forecaster.py. hexes are full-city units; multiply by scale for this run. */
+export interface Forecast {
+  slot: number;
+  slot_start: string;
+  version: string;
+  scale: number;
+  hexes: Record<string, number>;
+}
+
+/** One repositioner cycle (gateway summary of ch:reposition): [from res-7, to res-7] per driver sent. */
+export interface Reposition {
+  t: number;
+  n: number;
+  flows: [string, string][];
+  /** client receive time, ms */
+  at: number;
+}
+
 export interface ExplainCandidate {
   driver: string;
   dist_m: number;

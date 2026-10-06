@@ -5,7 +5,9 @@ import { WifiOff } from "lucide-react";
 import { num } from "@/lib/format";
 import { DEMAND_RAMP, IMBALANCE_RAMP, SUPPLY_RAMP, rgbCss, type Layer } from "@/lib/palette";
 
-export function Legend({ layer, max, windowS }: { layer: Layer; max: number; windowS: number | null }) {
+export function Legend({ layer, max, windowS, slot }: {
+  layer: Layer; max: number; windowS: number | null; slot?: string | null;
+}) {
   if (layer === "imbalance") {
     return (
       <figure className="legend">
@@ -22,7 +24,9 @@ export function Legend({ layer, max, windowS }: { layer: Layer; max: number; win
   return (
     <figure className="legend">
       <figcaption>
-        {layer === "supply" ? "Available drivers per hex" : `Requests per hex · last ${Math.round((windowS ?? 300) / 60)} min`}
+        {layer === "supply" ? "Available drivers per hex"
+          : layer === "forecast" ? `Expected requests per hex · ${slot ?? "this 15 min"}`
+            : `Requests per hex · last ${Math.round((windowS ?? 300) / 60)} min`}
       </figcaption>
       <div className="legend__bar">
         {ramp.map((c, i) => <span key={i} style={{ background: rgbCss(c) }} />)}

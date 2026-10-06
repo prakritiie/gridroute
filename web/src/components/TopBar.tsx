@@ -4,11 +4,11 @@ import { clock } from "@/lib/format";
 import type { Layer } from "@/lib/palette";
 import type { Link, Resolution } from "@/lib/types";
 
-const LAYERS: { id: Layer | "forecast"; label: string; soon?: boolean }[] = [
+const LAYERS: { id: Layer; label: string }[] = [
   { id: "supply", label: "Supply" },
   { id: "demand", label: "Demand" },
   { id: "imbalance", label: "Imbalance" },
-  { id: "forecast", label: "Forecast", soon: true },
+  { id: "forecast", label: "Forecast" },
 ];
 
 const RES_HINT: Record<Resolution, string> = { 9: "0.1 km²", 8: "0.7 km²", 7: "5.2 km²" };
@@ -23,6 +23,7 @@ interface Props {
 }
 
 export function TopBar({ link, t, layer, onLayer, res, onRes }: Props) {
+  const shown: Resolution = layer === "forecast" ? 7 : res;
   return (
     <header className="topbar">
       <div className="brand">
@@ -39,13 +40,10 @@ export function TopBar({ link, t, layer, onLayer, res, onRes }: Props) {
             key={l.id}
             role="tab"
             aria-selected={layer === l.id}
-            disabled={l.soon}
             className={layer === l.id ? "is-active" : ""}
-            onClick={() => !l.soon && onLayer(l.id as Layer)}
-            title={l.soon ? "Demand forecasting ships in milestone M3" : undefined}
+            onClick={() => onLayer(l.id)}
           >
             {l.label}
-            {l.soon && <span className="tabs__soon">Soon</span>}
           </button>
         ))}
       </nav>
@@ -54,8 +52,11 @@ export function TopBar({ link, t, layer, onLayer, res, onRes }: Props) {
         <div className="res" role="radiogroup" aria-label="Hexagon size">
           <span className="res__label">Hex size</span>
           {([9, 8, 7] as Resolution[]).map((r) => (
-            <button key={r} role="radio" aria-checked={res === r} className={res === r ? "is-active" : ""}
-              onClick={() => onRes(r)} title={`H3 resolution ${r} · ${RES_HINT[r]} per cell`}>
+            <button key={r} role="radio" aria-checked={shown === r} className={shown === r ? "is-active" : ""}
+              disabled={layer === "forecast" && r !== 7}
+              onClick={() => onRes(r)}
+              title={layer === "forecast" ? "The forecast is per 5.2 km² hex (H3 resolution 7)"
+                : `H3 resolution ${r} · ${RES_HINT[r]} per cell`}>
               {RES_HINT[r]}
             </button>
           ))}

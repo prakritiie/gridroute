@@ -2,7 +2,7 @@
 // one hue, monotone lightness, visible step gaps, darkest step >= 2:1 against the map surface.
 // Supply = blue and demand = orange everywhere (map, legend, sparklines): colour follows the entity.
 
-export type Layer = "supply" | "demand" | "imbalance";
+export type Layer = "supply" | "demand" | "imbalance" | "forecast";
 export type RGB = [number, number, number];
 
 const hex = (h: string): RGB => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as RGB;

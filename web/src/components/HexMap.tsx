@@ -4,17 +4,37 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import { MapboxOverlay, type MapboxOverlayProps } from "@deck.gl/mapbox";
 import { H3HexagonLayer } from "@deck.gl/geo-layers";
-import { ScatterplotLayer } from "@deck.gl/layers";
+import { LineLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { PickingInfo } from "@deck.gl/core";
+import { cellToLatLng } from "h3-js";
 import { useEffect, useMemo, useState } from "react";
 import { Map, useControl } from "react-map-gl/maplibre";
 
 import { divColor, imbalance, seqColor, DEMAND_RAMP, SUPPLY_RAMP, type Layer, type RGB } from "@/lib/palette";
-import type { Cell, Match } from "@/lib/types";
+import type { Cell, Match, Reposition } from "@/lib/types";
 
 const STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 const PULSE_MS = 5000;
 const PULSE: RGB = [255, 255, 255];
+
+/** One repositioner flow between two res-7 hexes, drivers sent along it. Positions are [lng, lat]. */
+interface Flow {
+  from: [number, number];
+  to: [number, number];
+  n: number;
+}
+
+function flows(rep: Reposition | null): Flow[] {
+  if (!rep) return [];
+  const byPair = new globalThis.Map<string, number>();
+  for (const [a, b] of rep.flows) byPair.set(`${a}>${b}`, (byPair.get(`${a}>${b}`) ?? 0) + 1);
+  return [...byPair].map(([k, n]) => {
+    const [a, b] = k.split(">");
+    const [alat, alng] = cellToLatLng(a);
+    const [blat, blng] = cellToLatLng(b);
+    return { from: [alng, alat], to: [blng, blat], n };
+  });
+}
 
 function DeckOverlay(props: MapboxOverlayProps) {
   const overlay = useControl(() => new MapboxOverlay(props));
@@ -37,9 +57,10 @@ interface Props {
   onSelect: (cell: Cell | null) => void;
   onHover: (h: HoverInfo | null) => void;
   focus?: [number, number] | null;
+  reposition?: Reposition | null;
 }
 
-export default function HexMap({ cells, layer, max, matches, selected, onSelect, onHover, focus }: Props) {
+export default function HexMap({ cells, layer, max, matches, selected, onSelect, onHover, focus, reposition }: Props) {
   const [beforeId, setBeforeId] = useState<string | undefined>();
   const [now, setNow] = useState(() => Date.now());
 
@@ -58,15 +79,17 @@ export default function HexMap({ cells, layer, max, matches, selected, onSelect,
   }, [latest]);
 
   const visible = useMemo(
-    () => cells.filter(([, s, d]) => (layer === "supply" ? s > 0 : layer === "demand" ? d > 0 : s + d > 0)),
+    () => cells.filter(([, s, d]) => (layer === "supply" ? s > 0
+      : layer === "demand" ? d > 0 : layer === "forecast" ? d >= 0.5 : s + d > 0)),
     [cells, layer],
   );
 
   const layers = useMemo(() => {
     const fill = (c: Cell): RGB =>
       layer === "supply" ? seqColor(SUPPLY_RAMP, c[1], max)
-        : layer === "demand" ? seqColor(DEMAND_RAMP, c[2], max)
+        : layer === "demand" || layer === "forecast" ? seqColor(DEMAND_RAMP, c[2], max)
           : divColor(imbalance(c[1], c[2]));
+    const repFlows = layer === "forecast" ? flows(reposition ?? null) : [];
     const sel = visible.find((c) => c[0] === selected) ?? (selected ? ([selected, 0, 0] as Cell) : null);
     // Interleaved mode: draw under the basemap's labels. MapboxOverlay reads `beforeId` off each layer,
     // but @deck.gl/mapbox doesn't export that prop type (LayerOverlayProps), so it goes in via a spread.
@@ -99,6 +122,23 @@ export default function HexMap({ cells, layer, max, matches, selected, onSelect,
         getLineWidth: 2,
         ...under,
       }),
+      new LineLayer<Flow>({
+        id: "reposition",                  // the last repositioner cycle: idle drivers sent to a shortage
+        data: repFlows,
+        getSourcePosition: (f) => f.from,
+        getTargetPosition: (f) => f.to,
+        getColor: [255, 255, 255, 170],
+        widthUnits: "pixels",
+        getWidth: (f) => Math.min(6, 1.5 + Math.sqrt(f.n)),
+      }),
+      new ScatterplotLayer<Flow>({
+        id: "reposition-ends",
+        data: repFlows,
+        getPosition: (f) => f.to,
+        radiusUnits: "pixels",
+        getRadius: 3.5,
+        getFillColor: [255, 255, 255, 230],
+      }),
       new ScatterplotLayer<[number, number]>({
         id: "focus",                       // the pickup of the match being explained
         data: focus ? [focus] : [],
@@ -126,7 +166,7 @@ export default function HexMap({ cells, layer, max, matches, selected, onSelect,
         updateTriggers: { getRadius: now, getFillColor: now, getLineColor: now },
       }),
     ];
-  }, [visible, layer, max, matches, now, selected, beforeId, focus]);
+  }, [visible, layer, max, matches, now, selected, beforeId, focus, reposition]);
 
   return (
     <Map

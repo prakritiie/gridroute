@@ -1,12 +1,13 @@
 "use client";
 
 import { AlertTriangle, CheckCircle2, X } from "lucide-react";
+import { cellToParent } from "h3-js";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { Sparkline } from "./Sparkline";
 import { ago, dur, num, pct } from "@/lib/format";
 import { SERIES, divColor, imbalance, rgbCss, type Layer } from "@/lib/palette";
-import type { Cell, Kpis, Resolution } from "@/lib/types";
+import type { Cell, Forecast, Kpis, Reposition, Resolution } from "@/lib/types";
 
 function useNow(every = 1000) {
   const [now, setNow] = useState(() => Date.now());
@@ -113,11 +114,32 @@ function balanceWord(v: number) {
   return "Driver surplus";
 }
 
-function HexDetails({ cell, cells, layer, res, onPick, onClose }: {
-  cell: Cell | null; cells: Cell[]; layer: Layer; res: Resolution; onPick: (c: Cell) => void; onClose: () => void;
+function Forecasting({ forecast, reposition }: { forecast: Forecast | null; reposition: Reposition | null }) {
+  if (!forecast) return null;
+  const total = Object.values(forecast.hexes).reduce((a, v) => a + v, 0) * forecast.scale;
+  return (
+    <section className="section">
+      <div className="section__head">
+        <h2>Forecast</h2>
+        <span className="muted">demand {forecast.version}</span>
+      </div>
+      <dl className="kv">
+        <div><dt>Slot (NYC)</dt><dd>{forecast.slot_start.slice(11, 16)}</dd></div>
+        <div><dt><i style={{ background: SERIES.demand }} />Expected requests · 15 min</dt><dd>{num(Math.round(total))}</dd></div>
+        <div><dt>Repositioned · last cycle</dt><dd>{reposition ? num(reposition.n) : "–"}</dd></div>
+      </dl>
+    </section>
+  );
+}
+
+function HexDetails({ cell, cells, layer, res, forecastByHex, onPick, onClose }: {
+  cell: Cell | null; cells: Cell[]; layer: Layer; res: Resolution; forecastByHex: Map<string, number>;
+  onPick: (c: Cell) => void; onClose: () => void;
 }) {
   if (cell) {
+    const forecasting = layer === "forecast";
     const b = imbalance(cell[1], cell[2]);
+    const expected = forecastByHex.get(res === 7 ? cell[0] : cellToParent(cell[0], 7));
     return (
       <section className="section">
         <div className="section__head">
@@ -127,18 +149,29 @@ function HexDetails({ cell, cells, layer, res, onPick, onClose }: {
         <code className="hexid">{cell[0]}</code>
         <dl className="kv">
           <div><dt><i style={{ background: SERIES.supply }} />Drivers</dt><dd>{num(cell[1])}</dd></div>
-          <div><dt><i style={{ background: SERIES.demand }} />Requests · 5 min</dt><dd>{num(cell[2])}</dd></div>
-          <div><dt><i style={{ background: rgbCss(divColor(b)) }} />Balance</dt><dd>{balanceWord(b)}</dd></div>
+          {!forecasting && <div><dt><i style={{ background: SERIES.demand }} />Requests · 5 min</dt><dd>{num(cell[2])}</dd></div>}
+          {!forecasting && <div><dt><i style={{ background: rgbCss(divColor(b)) }} />Balance</dt><dd>{balanceWord(b)}</dd></div>}
+          <div>
+            <dt><i style={{ background: SERIES.demand }} />Expected · 15 min{res === 7 ? "" : " (whole area)"}</dt>
+            <dd>{expected === undefined ? "–" : num(Math.round(expected))}</dd>
+          </div>
           <div><dt>Resolution</dt><dd>H3 · {res}</dd></div>
         </dl>
-        <p className="footnote">Forecast and average ETA per hex arrive with M3.</p>
+        <p className="footnote">
+          {expected === undefined
+            ? "No forecast for this area: the model covers the 84 hexes with real taxi demand."
+            : res === 7 ? "Forecast for this hex in the current 15-minute slot (LightGBM, Poisson)."
+              : "Forecasts are per 5.2 km² area; this is the area containing the hex."}
+        </p>
       </section>
     );
   }
-  const metric = (c: Cell) => (layer === "supply" ? c[1] : layer === "demand" ? c[2] : imbalance(c[1], c[2]));
-  const top = [...cells].filter((c) => (layer === "imbalance" ? c[2] > 0 : metric(c) > 0))
+  const metric = (c: Cell) => (layer === "supply" ? c[1] : layer === "demand" ? c[2]
+    : layer === "forecast" ? c[2] - c[1] : imbalance(c[1], c[2]));
+  const top = [...cells].filter((c) => (layer === "imbalance" || layer === "forecast" ? c[2] > 0 : metric(c) > 0))
     .sort((a, b) => metric(b) - metric(a) || b[2] - a[2]).slice(0, 6);
-  const title = { supply: "Most drivers", demand: "Most requests", imbalance: "Most short of drivers" }[layer];
+  const title = { supply: "Most drivers", demand: "Most requests", imbalance: "Most short of drivers",
+    forecast: "Largest expected shortfall" }[layer];
   return (
     <section className="section">
       <div className="section__head">
@@ -146,11 +179,11 @@ function HexDetails({ cell, cells, layer, res, onPick, onClose }: {
         <span className="muted">Select a hex</span>
       </div>
       <table className="table">
-        <thead><tr><th>Hex</th><th>Drivers</th><th>Requests</th></tr></thead>
+        <thead><tr><th>Hex</th><th>Drivers</th><th>{layer === "forecast" ? "Expected" : "Requests"}</th></tr></thead>
         <tbody>
           {top.map((c) => (
             <tr key={c[0]} onClick={() => onPick(c)} tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onPick(c)}>
-              <td><code>{c[0].slice(0, 9)}</code></td><td>{num(c[1])}</td><td>{num(c[2])}</td>
+              <td><code>{c[0].slice(0, 9)}</code></td><td>{num(c[1])}</td><td>{num(Math.round(c[2]))}</td>
             </tr>
           ))}
           {top.length === 0 && <tr><td colSpan={3} className="muted">No data yet</td></tr>}
@@ -163,6 +196,7 @@ function HexDetails({ cell, cells, layer, res, onPick, onClose }: {
 /* ─────────────────────────────── sidebar ─────────────────────────────── */
 export function Sidebar(props: {
   kpis: Kpis | null; history: Kpis[]; cell: Cell | null; cells: Cell[]; layer: Layer; res: Resolution;
+  forecast: Forecast | null; forecastByHex: Map<string, number>; reposition: Reposition | null;
   onPick: (c: Cell) => void; onClose: () => void; top?: ReactNode;
 }) {
   return (
@@ -170,8 +204,9 @@ export function Sidebar(props: {
       {props.top}
       <Overview kpis={props.kpis} history={props.history} />
       <Integrity kpis={props.kpis} />
+      <Forecasting forecast={props.forecast} reposition={props.reposition} />
       <HexDetails cell={props.cell} cells={props.cells} layer={props.layer} res={props.res}
-        onPick={props.onPick} onClose={props.onClose} />
+        forecastByHex={props.forecastByHex} onPick={props.onPick} onClose={props.onClose} />
     </aside>
   );
 }

@@ -38,7 +38,18 @@ export default function Dashboard() {
   }, [explainId]);
   const shown = explain && explain.id === explainId ? explain : null;
 
-  const cells: Cell[] = useMemo(() => ops.hexes?.res[String(res) as "9" | "8" | "7"] ?? [], [ops.hexes, res]);
+  // Forecast layer: res-7 hexes, [id, drivers now, requests expected this 15-min slot] in this run's units.
+  const forecastCells: Cell[] = useMemo(() => {
+    const f = ops.forecast;
+    if (!f) return [];
+    const supply = new Map((ops.hexes?.res["7"] ?? []).map((c) => [c[0], c[1]]));
+    return Object.entries(f.hexes).map(([h, v]) => [h, supply.get(h) ?? 0, v * f.scale] as Cell);
+  }, [ops.forecast, ops.hexes]);
+  const forecastByHex = useMemo(() => new Map(forecastCells.map((c) => [c[0], c[2]])), [forecastCells]);
+  const forecasting = layer === "forecast";
+  const cells: Cell[] = useMemo(
+    () => (forecasting ? forecastCells : ops.hexes?.res[String(res) as "9" | "8" | "7"] ?? []),
+    [forecasting, forecastCells, ops.hexes, res]);
   const selected = selectedId ? cells.find((c) => c[0] === selectedId) ?? [selectedId, 0, 0] as Cell : null;
   // Live values for the hovered hex; hidden once it's gone from the frame (e.g. after a resolution change)
   const hovered = hover ? cells.find((c) => c[0] === hover.id) : undefined;
@@ -60,9 +71,11 @@ export default function Dashboard() {
 
   return (
     <div className="app">
-      <TopBar link={ops.link} t={ops.hexes?.t ?? null} layer={layer} onLayer={setLayer} res={res} onRes={changeRes} />
+      <TopBar link={ops.link} t={ops.hexes?.t ?? null} layer={layer} res={res} onRes={changeRes}
+        onLayer={(l) => { setLayer(l); setSelectedId(null); setHover(null); }} />
 
-      <Sidebar kpis={ops.kpis} history={ops.history} cell={selected} cells={cells} layer={layer} res={res}
+      <Sidebar kpis={ops.kpis} history={ops.history} cell={selected} cells={cells} layer={layer}
+        res={forecasting ? 7 : res} forecast={ops.forecast} forecastByHex={forecastByHex} reposition={ops.reposition}
         onPick={(c) => setSelectedId(c[0])} onClose={() => setSelectedId(null)}
         top={explainId ? <ExplainPanel explain={shown?.data ?? null} error={shown?.error ?? null}
           onClose={() => setExplainId(null)} /> : null} />
@@ -77,23 +90,47 @@ export default function Dashboard() {
           onSelect={(c) => setSelectedId(c?.[0] ?? null)}
           onHover={setHover}
           focus={shown?.data?.pickup ?? null}
+          reposition={ops.reposition}
         />
         {hover && hovered && (
           <div className="tooltip" style={{ left: hover.x, top: hover.y }}>
             <div className="tooltip__row"><span>Drivers</span><b>{num(hovered[1])}</b></div>
-            <div className="tooltip__row"><span>Requests · 5 min</span><b>{num(hovered[2])}</b></div>
-            <div className="tooltip__foot">{balance(hovered)}</div>
+            {forecasting
+              ? <div className="tooltip__row"><span>Expected · 15 min</span><b>{num(Math.round(hovered[2]))}</b></div>
+              : <div className="tooltip__row"><span>Requests · 5 min</span><b>{num(hovered[2])}</b></div>}
+            <div className="tooltip__foot">{forecasting ? shortfall(hovered) : balance(hovered)}</div>
           </div>
         )}
         <div className="map__legend">
-          <Legend layer={layer} max={max.value} windowS={ops.hexes?.window_s ?? null} />
+          <Legend layer={layer} max={max.value} windowS={ops.hexes?.window_s ?? null}
+            slot={ops.forecast ? slotLabel(ops.forecast.slot_start) : null} />
         </div>
+        {forecasting && !ops.forecast && ops.hexes && (
+          <div className="map__notice" role="status">
+            No forecast yet. It appears once a demand model is published and the history is seeded
+            (<code>python -m tools.seed_demand</code>), and during every replay.
+          </div>
+        )}
         {ops.link !== "live" && !ops.hexes && <Offline url={GATEWAY_WS} />}
       </main>
 
       <MatchFeed matches={ops.matches} kpis={ops.kpis} selected={explainId} onSelect={setExplainId} />
     </div>
   );
+}
+
+function shortfall(c: Cell) {
+  const gap = c[2] - c[1];
+  return gap >= 1 ? `About ${Math.round(gap)} drivers short`
+    : gap <= -1 ? `${Math.round(-gap)} more drivers than needed` : "Balanced";
+}
+
+/** "07:15–07:30" from the slot's naive NYC start time, shown as NYC time whatever the browser's zone. */
+function slotLabel(iso: string) {
+  const [h, m] = iso.slice(11, 16).split(":").map(Number);
+  const end = h * 60 + m + 15;
+  const hm = (x: number) => `${String(Math.floor(x / 60) % 24).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`;
+  return `${hm(h * 60 + m)}–${hm(end)}`;
 }
 
 function balance(c: Cell) {

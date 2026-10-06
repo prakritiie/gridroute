@@ -296,13 +296,15 @@ async def ops_socket(ws: WebSocket) -> None:
     q: asyncio.Queue = asyncio.Queue(maxsize=OPS_QUEUE)
     ops.clients.add(q)                                  # subscribe before reading state: no gap to lose frames in
     metrics.ops_sockets.inc()
-    snap, k = await app.state.r.mget("hexes:snapshot", "kpis:latest")
+    snap, k, fc = await app.state.r.mget("hexes:snapshot", "kpis:latest", "forecast:snapshot")
     for frame in list(ops.recent):
         await ws.send_text(frame)
     if k:
         await ws.send_text(_frame("kpis", k))
     if snap:
         await ws.send_text(_frame("hexes", snap))
+    if fc:
+        await ws.send_text(_frame("forecast", fc))
 
     async def wait_closed() -> None:                    # the dashboard never sends; this notices it leaving
         with contextlib.suppress(WebSocketDisconnect, RuntimeError):

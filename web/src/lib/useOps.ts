@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { HexSnapshot, Kpis, Link, Match } from "./types";
+import type { Forecast, HexSnapshot, Kpis, Link, Match, Reposition } from "./types";
 
 export const GATEWAY_WS = process.env.NEXT_PUBLIC_GATEWAY_WS ?? "ws://localhost:8000/ws/ops";
 
@@ -15,12 +15,15 @@ export interface OpsState {
   kpis: Kpis | null;
   history: Kpis[];
   matches: Match[];
+  forecast: Forecast | null;
+  reposition: Reposition | null;
 }
 
 /** Live feed from the gateway's /ws/ops. Reconnects with capped backoff; never throws into the UI. */
 export function useOps(url: string = GATEWAY_WS): OpsState {
   const [state, setState] = useState<OpsState>({
     link: "connecting", everConnected: false, hexes: null, kpis: null, history: [], matches: [],
+    forecast: null, reposition: null,
   });
   const retry = useRef(0);
 
@@ -50,6 +53,10 @@ export function useOps(url: string = GATEWAY_WS): OpsState {
         } else if (msg.type === "match") {
           const m = { ...(msg.data as Omit<Match, "at">), at: Date.now() };
           setState((s) => ({ ...s, matches: [m, ...s.matches].slice(0, MATCH_LOG) }));
+        } else if (msg.type === "forecast") {
+          setState((s) => ({ ...s, forecast: msg.data as Forecast }));
+        } else if (msg.type === "reposition") {
+          setState((s) => ({ ...s, reposition: { ...(msg.data as Omit<Reposition, "at">), at: Date.now() } }));
         }
       };
       ws.onclose = () => {
