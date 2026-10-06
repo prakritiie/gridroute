@@ -25,6 +25,7 @@ stream_pending = Gauge("stream_pending", "Entries not yet processed (lag + pendi
 drivers_evicted = Counter("drivers_evicted_total", "Silent drivers removed by the reaper")
 offers_expired = Counter("offers_expired_total", "Offers that lapsed without an accept and were re-queued")
 rides_swept = Counter("rides_swept_total", "Open rides closed because their driver no longer held them")
+repositions = Counter("repositions_total", "Idle drivers sent toward a forecast shortage")
 
 # Gateway
 rides_requested = Counter("rides_requested_total", "POST /rides accepted")

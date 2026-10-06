@@ -1,12 +1,13 @@
 """Aggregator: supply/demand snapshot, rollups, KPIs, demand history, live audit."""
 import json
+from datetime import datetime
 
 import h3
 
-from core import config
+from core import clock, config
 from core.scripts import Claim
 from tests.helpers import CELL_A, CELL_B, now_ms, queue_ride
-from workers.aggregator import SLOT_MS, Aggregator
+from workers.aggregator import LAST_SLOT, Aggregator
 
 LAT, LNG = h3.cell_to_latlng(CELL_A)
 
@@ -67,24 +68,78 @@ def test_kpis_from_events(r, s):
     assert k["double_bookings"] == 0
 
 
-def test_demand_history_rolls_every_15_minutes(r):
-    slot0 = (now_ms() // SLOT_MS) * SLOT_MS
-    agg = Aggregator(r, now_ms=slot0 + 1000)
-    _ride_request(r, slot0 + 2000)
-    _ride_request(r, slot0 + 3000)
-    agg.step(now=slot0 + 4000)
+SIM0 = datetime(2016, 6, 7, 7, 0)
+SLOT_WALL = 90_000                                          # a 15-min sim slot at x10 is 90 s of wall time
+
+
+def _sim(r, speed=10.0):
+    w0 = now_ms()
+    clock.set_sim_clock(r, SIM0, speed, wall0_ms=w0)
+    return w0
+
+
+def test_demand_history_rolls_on_sim_clock_slots(r):
+    w0 = _sim(r)
     hex7 = h3.cell_to_parent(CELL_A, config.RES_DEMAND)
-    assert not r.exists(f"demand_hist:{hex7}")            # slot still open
+    agg = Aggregator(r, now_ms=w0)
+    _ride_request(r, w0 + 2000)
+    _ride_request(r, w0 + 3000)
+    agg.step(now=w0 + 4000)
+    assert not r.exists(f"demand_hist:{hex7}")              # slot still open
+    assert int(r.get(LAST_SLOT)) == clock.slot_of(SIM0) - 1
 
-    _ride_request(r, slot0 + SLOT_MS + 1000)               # first request of the next slot
-    agg.step(now=slot0 + SLOT_MS + 2000)
+    _ride_request(r, w0 + SLOT_WALL + 1000)                 # first request of the next sim slot
+    agg.step(now=w0 + SLOT_WALL + 2000)
     assert r.lrange(f"demand_hist:{hex7}", 0, -1) == ["2"]
-
-    agg.step(now=slot0 + 2 * SLOT_MS + 1000)
+    agg.step(now=w0 + 2 * SLOT_WALL + 1000)
     assert r.lrange(f"demand_hist:{hex7}", 0, -1) == ["2", "1"]
+    agg.step(now=w0 + 4 * SLOT_WALL + 1000)                 # two quiet slots at once: both appended as 0
+    assert r.lrange(f"demand_hist:{hex7}", 0, -1) == ["2", "1", "0", "0"]
+    assert int(r.get(LAST_SLOT)) == clock.slot_of(SIM0) + 3
 
-    agg.step(now=slot0 + 3 * SLOT_MS + 1000)               # quiet slot still appends a 0
-    assert r.lrange(f"demand_hist:{hex7}", 0, -1) == ["2", "1", "0"]
+
+def test_demand_history_is_scaled_to_full_city_units(r):
+    w0 = _sim(r)
+    r.set("config:demand_scale", 0.2)                       # a 20% replay
+    hex7 = h3.cell_to_parent(CELL_A, config.RES_DEMAND)
+    agg = Aggregator(r, now_ms=w0)
+    agg.step(now=w0 + 1000)
+    for i in range(3):
+        _ride_request(r, w0 + 2000 + i)
+    agg.step(now=w0 + SLOT_WALL + 1000)
+    assert r.lrange(f"demand_hist:{hex7}", 0, -1) == ["15"]
+
+
+def test_demand_history_restarts_after_a_clock_jump(r):
+    w0 = _sim(r)
+    hex7 = h3.cell_to_parent(CELL_A, config.RES_DEMAND)
+    agg = Aggregator(r, now_ms=w0)
+    agg.step(now=w0 + 1000)
+    _ride_request(r, w0 + 2000)
+    agg.step(now=w0 + SLOT_WALL + 1000)
+    assert r.lrange(f"demand_hist:{hex7}", 0, -1) == ["1"]
+
+    agg.step(now=w0 + 20 * SLOT_WALL)                      # a long pause (laptop sleep): no padded zeros
+    assert not r.exists(f"demand_hist:{hex7}")
+    assert int(r.get(LAST_SLOT)) == clock.slot_of(SIM0) + 19
+
+    r.set(LAST_SLOT, clock.slot_of(SIM0) + 500)             # history from a later timeline: clock went back
+    r.rpush(f"demand_hist:{hex7}", 9)
+    agg.step(now=w0 + 20 * SLOT_WALL + 1000)
+    assert not r.exists(f"demand_hist:{hex7}")
+    assert int(r.get(LAST_SLOT)) == clock.slot_of(SIM0) + 19
+
+
+def test_warm_started_history_is_continued(r):
+    w0 = _sim(r)
+    hex7 = h3.cell_to_parent(CELL_A, config.RES_DEMAND)
+    r.rpush(f"demand_hist:{hex7}", 4, 5)                    # what a replay seeds from the data
+    r.set(LAST_SLOT, clock.slot_of(SIM0) - 1)
+    agg = Aggregator(r, now_ms=w0)
+    _ride_request(r, w0 + 1000)
+    agg.step(now=w0 + 2000)
+    agg.step(now=w0 + SLOT_WALL + 1000)
+    assert r.lrange(f"demand_hist:{hex7}", 0, -1) == ["4", "5", "1"]
 
 
 def test_audit_feeds_fleet_kpis(r, s):

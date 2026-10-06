@@ -18,7 +18,7 @@ import redis
 
 EVENT_COLUMNS = ["id", "type", "ride", "driver", "t", "sim_t", "leg_s", "leg_m", "osrm_s", "wait_s", "match_s",
                  "trip_s", "trip_m", "dist_m", "eta_s", "attempts", "ms", "n",
-                 "drivers", "sim_hours", "empty_km", "loaded_km", "conflicts"]
+                 "drivers", "sim_hours", "empty_km", "loaded_km", "conflicts", "repos_km", "repositions"]
 NUMERIC = set(EVENT_COLUMNS) - {"id", "type", "ride", "driver"}
 
 

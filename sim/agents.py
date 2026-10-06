@@ -1,7 +1,9 @@
 """Replay drivers that follow real streets (M2).
 
 A driver is idle where it last dropped off (no random cruising: empty km then means exactly the km driven
-to pickups, and repositioning in R4 is the only other source). On an assignment it routes to the pickup
+to pickups, and repositioning in R4 is the only other source). A reposition is an empty drive toward a
+forecast shortage; the driver stays available, so an offer on the way cuts it short (the km driven so far
+still count). On an assignment it routes to the pickup
 over OSRM, timed by June congestion; then carries the rider over the OSRM path in the trip's real recorded
 duration; then frees itself with trip_done.
 
@@ -28,15 +30,17 @@ def straight_route(frm: tuple[float, float], to: tuple[float, float], speed_mps:
 
 @dataclass
 class Leg:
-    kind: str                      # "pickup" | "trip" | "cruise"
+    kind: str                      # "pickup" | "trip" | "cruise" | "reposition"
     ride_id: str
     route: Route
     start_sim: float               # sim seconds
     duration_s: float              # true sim seconds for this leg
+    covered_m: float = 0.0         # distance driven so far (updated by Fleet.advance)
 
     def position(self, sim_t: float) -> tuple[float, float]:
         frac = min(1.0, max(0.0, (sim_t - self.start_sim) / self.duration_s)) if self.duration_s > 0 else 1.0
         target = frac * self.route.cum[-1]
+        self.covered_m = frac * self.route.distance_m
         i = min(bisect.bisect_right(self.route.cum, target), len(self.route.coords) - 1)
         if i == 0:
             return self.route.coords[0]
@@ -58,7 +62,9 @@ class Driver:
     mode: str = IDLE
     ride_id: str | None = None
     leg: Leg | None = None
-    empty_m: float = 0.0           # driven without a passenger (pickup and cruise legs)
+    empty_m: float = 0.0           # driven without a passenger (pickup, cruise and reposition legs)
+    repos_m: float = 0.0           # of which repositioning
+    repositions: int = 0
     loaded_m: float = 0.0
     trips: int = 0
 
@@ -84,6 +90,10 @@ class Fleet:
             if d.ride_id != ride_id:
                 self.conflicts += 1
             return False
+        if d.leg is not None and d.leg.kind in ("cruise", "reposition"):   # cut short: count what was driven
+            d.empty_m += d.leg.covered_m
+            if d.leg.kind == "reposition":
+                d.repos_m += d.leg.covered_m
         d.mode, d.ride_id, d.leg = ROUTING, ride_id, None
         return True
 
@@ -93,6 +103,19 @@ class Fleet:
         if d.mode != IDLE or d.leg is not None:
             return False
         d.leg = leg
+        return True
+
+    def reposition(self, driver_id: str, leg: Leg) -> bool:
+        """An idle driver heads for a forecast shortage. Replaces a roaming cruise; ignored if busy."""
+        d = self.drivers.get(driver_id)
+        if d is None or d.mode != IDLE:
+            return False
+        if d.leg is not None:
+            d.empty_m += d.leg.covered_m
+            if d.leg.kind == "reposition":
+                d.repos_m += d.leg.covered_m
+        d.leg = leg
+        d.repositions += 1
         return True
 
     def start_leg(self, driver_id: str, leg: Leg) -> bool:
@@ -112,7 +135,7 @@ class Fleet:
         return True
 
     def advance(self, sim_t: float) -> list[tuple[str, Driver, Leg]]:
-        """Move everyone to sim_t. Returns finished legs as ("pickup" | "trip", driver, leg)."""
+        """Move everyone to sim_t. Returns finished legs as (leg kind, driver, leg)."""
         finished = []
         for d in self.drivers.values():
             if d.leg is None:
@@ -121,8 +144,10 @@ class Fleet:
             if d.leg.done(sim_t):
                 leg = d.leg
                 d.leg = None
-                if leg.kind == "cruise":
+                if leg.kind in ("cruise", "reposition"):
                     d.empty_m += leg.route.distance_m     # still idle, now somewhere else
+                    if leg.kind == "reposition":
+                        d.repos_m += leg.route.distance_m
                 elif leg.kind == "pickup":
                     d.empty_m += leg.route.distance_m
                     d.mode = ROUTING                      # waiting for the trip route

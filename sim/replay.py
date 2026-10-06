@@ -1,6 +1,7 @@
 """Replay a window of real June 2016 demand through the live system and record the run (spec §6.3, §8.4).
 
     python -m sim.replay --day 2016-06-07 --start 07:00 --hours 2 --sample 0.2 --drivers 2000 --speed 10 --seed 1
+    python -m sim.replay --policy batch-eta --reposition ...        # row R4 (needs forecaster + repositioner)
 
 Needs the stack (gateway, ingest, matcher, reaper, aggregator) and OSRM; the live demo sim/riders must be
 stopped. --reset clears the simulated Redis state first.
@@ -10,6 +11,9 @@ stopped. --reset clears the simulated Redis state first.
   pickup   drive over the OSRM route; true time = OSRM time x June congestion (pickup hex, hour of week)
   trip     the OSRM route, driven in the trip's real recorded duration
   clock    one sim clock for everything: sim = start + wall elapsed x speed
+  demand   history warm start: the 28 days of real counts before the window are written to demand_hist:*
+           and config:demand_scale = --sample, so the forecaster has history from the first slot
+  repos    with --reposition, idle drivers drive (empty) toward the target the repositioner sends
 
 After the window plus a drain period, the recorder writes $GRIDROUTE_DATA_DIR/runs/{run_id}/.
 """
@@ -28,7 +32,7 @@ import duckdb
 import httpx
 import redis
 
-from core import clock, config, osrm
+from core import clock, config, demand, osrm
 from sim.agents import IDLE, Fleet, Leg, straight_route
 from sim.congestion import Congestion, hour_of_week
 from sim.transport import WebSocketTransport
@@ -66,7 +70,8 @@ class Replay:
             config.DATA_DIR, a.day, a.start, a.hours, a.sample, a.drivers, a.seed)
         self.fleet = Fleet.at(positions, seq_base=int(time.time() * 1000))
         self.rides: dict[str, dict] = {}            # ride_id -> request facts (sim times, real duration)
-        self.run_id = f"{a.day}-{a.start.replace(':', '')}-{a.policy}-s{a.seed}-{int(time.time())}"
+        self.label = f"{a.policy}-repos" if a.reposition else a.policy
+        self.run_id = f"{a.day}-{a.start.replace(':', '')}-{self.label}-s{a.seed}-{int(time.time())}"
         self.pending: set[asyncio.Task] = set()
         self.stop = False
 
@@ -89,6 +94,23 @@ class Replay:
             duration = real_s if real_s else route.duration_s * self.cong.factor(frm[0], frm[1],
                                                                                  hour_of_week(self.sim_dt(start)))
         self.fleet.start_leg(driver_id, Leg(kind, ride_id, route, start, max(duration, 1.0)))
+
+    async def _reposition(self, driver_id: str, frm, to) -> None:
+        route = await osrm.route(self.http, frm, to) or straight_route(frm, to)
+        start = self.sim_now()
+        duration = route.duration_s * self.cong.factor(frm[0], frm[1], hour_of_week(self.sim_dt(start)))
+        d = self.fleet.drivers[driver_id]
+        if (d.lat, d.lng) != frm:                 # moved meanwhile (an offer came and went): stay put
+            return
+        self.fleet.reposition(driver_id, Leg("reposition", "", route, start, max(duration, 1.0)))
+
+    def warm_start(self) -> None:
+        """Seed the demand history with the real counts of the 28 days before the window."""
+        counts, hexes = demand.load_counts()
+        first = clock.slot_of(self.t0)
+        demand.seed_history(self.r, counts, hexes, data_end=first, live_last=first - 1)
+        self.r.set("config:demand_scale", self.a.sample)
+        self.r.delete("forecast:snapshot")
 
     def _spawn(self, coro) -> None:
         t = asyncio.create_task(coro)
@@ -127,7 +149,9 @@ class Replay:
         attempts = max(1, math.ceil(a.patience_min * 60 / (a.speed * config.MATCH_INTERVAL_S)))
         self.r.set("config:max_attempts", attempts)
         self.r.set("config:policy", a.policy)                 # the matcher switches policy for this run
+        self.r.set("config:reposition", int(a.reposition))
         cfg["max_attempts"] = str(attempts)
+        cfg["policy"] = self.label                             # the report's row key (R4 = batch-eta-repos)
         self.r.hset(f"run:{self.run_id}", mapping=cfg | {"status": "running"})
         self.r.set("run:current", self.run_id)
         busy_est = len(self.trips) / (span / 3600) * (19 / 60)
@@ -140,6 +164,10 @@ class Replay:
         self.tx = await WebSocketTransport.connect(a.gateway_ws, list(self.fleet.drivers))
         self.wall0 = time.time()
         clock.set_sim_clock(self.r, self.t0, a.speed, int(self.wall0 * 1000))   # the model's "now" is June 2016
+        try:
+            self.warm_start()                    # after the clock: the aggregator must already see June 2016
+        except FileNotFoundError:
+            print("replay: no demand counts (python -m ml.demand_data); forecaster starts cold", flush=True)
         next_req, tick, last_report = 0, 0, 0.0
 
         while not self.stop:
@@ -156,6 +184,11 @@ class Replay:
 
             # offers -> routing to the pickup
             for msg in self.tx.drain():
+                if msg.get("type") == "reposition":
+                    d = self.fleet.drivers.get(msg["driver_id"])
+                    if d and d.mode == IDLE:
+                        self._spawn(self._reposition(d.id, (d.lat, d.lng), tuple(msg["target"])))
+                    continue
                 ride = self.rides.get(msg["ride_id"])
                 d = self.fleet.drivers.get(msg["driver_id"])
                 if ride and d and self.fleet.accept(d.id, msg["ride_id"]):
@@ -169,6 +202,8 @@ class Replay:
             # movement, arrivals
             for kind, d, leg in self.fleet.advance(now):
                 ride = self.rides.get(leg.ride_id, {})
+                if kind in ("cruise", "reposition"):
+                    continue
                 if kind == "pickup":
                     await self._emit(type="pickup", ride=leg.ride_id, driver=d.id, sim_t=round(now, 1),
                                      leg_s=round(leg.duration_s, 1), leg_m=round(leg.route.distance_m),
@@ -202,6 +237,8 @@ class Replay:
         await self._emit(type="fleet", drivers=len(self.fleet.drivers), sim_hours=round(sim_hours, 4),
                          empty_km=round(sum(d.empty_m for d in self.fleet.drivers.values()) / 1000, 2),
                          loaded_km=round(sum(d.loaded_m for d in self.fleet.drivers.values()) / 1000, 2),
+                         repos_km=round(sum(d.repos_m for d in self.fleet.drivers.values()) / 1000, 2),
+                         repositions=sum(d.repositions for d in self.fleet.drivers.values()),
                          conflicts=self.fleet.conflicts)
         await asyncio.sleep(1.0)                     # let the gateway append the last events
         end_id = f"{int(time.time() * 1000)}-0"
@@ -209,7 +246,7 @@ class Replay:
         await self.http.aclose()
         await self.http_gw.aclose()
         self.r.hset(f"run:{self.run_id}", mapping={"status": "done"})
-        self.r.delete("config:max_attempts", "config:policy", clock.KEY)
+        self.r.delete("config:max_attempts", "config:policy", "config:reposition", "config:demand_scale", clock.KEY)
         out = record(self.r, self.run_id, start_id, end_id, self.rides, cfg, config.DATA_DIR / "runs")
         print(f"recorded {out}", flush=True)
         return self.run_id
@@ -227,6 +264,8 @@ def main() -> None:
     ap.add_argument("--policy", default="greedy-distance",
                     choices=["greedy-distance", "greedy-eta", "batch-distance", "batch-eta"],
                     help="set on the running matchers for this run (spec §8.4 rows R0-R3)")
+    ap.add_argument("--reposition", action="store_true",
+                    help="turn the repositioner on for this run (row R4 with --policy batch-eta)")
     ap.add_argument("--patience-min", type=float, default=5, help="sim minutes a rider waits for a driver")
     ap.add_argument("--drain-min", type=float, default=20, help="sim minutes after the window to finish trips")
     ap.add_argument("--gateway-http", default="http://localhost:8000")

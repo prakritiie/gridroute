@@ -9,7 +9,8 @@ WS /ws/driver   up:   {"type":"register","driver_ids":[..]}
                 down: {"type":"assignment","driver_id","ride_id","pickup":[lat,lng],"dropoff"?,"eta_s"}
                       {"type":"accept_ack","driver_id","ride_id","ok"}       ok=false: the offer lapsed
                       {"type":"trip_done_ack","ride_id","ok"}
-WS /ws/ops      down: {"type":"hexes"|"kpis"|"match","data":...}; on connect the recent matches and the
+                      {"type":"reposition","driver_id","target":[lat,lng],"to"}   drive there if still idle
+WS /ws/ops      down: {"type":"hexes"|"kpis"|"match"|"forecast"|"reposition","data":...}; on connect the recent matches and the
                       latest kpis and hexes are sent first. Each client has a bounded queue: a slow
                       browser drops frames instead of slowing everyone else.
 POST /rides     {lat,lng[,dropoff_lat,dropoff_lng]} -> 202 {ride_id}
@@ -41,6 +42,7 @@ log = logging.getLogger("gateway")
 
 PINGS, RIDES, EVENTS = "stream:pings", "stream:rides", "stream:events"
 OFFERS, HEXES, KPIS = "ch:offers", "ch:hexes", "ch:kpis"
+FORECAST, REPOSITION = "ch:forecast", "ch:reposition"
 RIDE_TTL_S = 24 * 3600
 OPS_QUEUE = 8           # frames buffered per dashboard client before the oldest is dropped
 RECENT_MATCHES = 40
@@ -101,7 +103,7 @@ def _frame(kind: str, data: str) -> str:
 
 async def _fan_out(r: aioredis.Redis, sockets: DriverSockets, ops: OpsHub) -> None:
     pubsub = r.pubsub()
-    await pubsub.subscribe(OFFERS, HEXES, KPIS)
+    await pubsub.subscribe(OFFERS, HEXES, KPIS, FORECAST, REPOSITION)
     try:
         async for m in pubsub.listen():
             if m["type"] != "message":
@@ -117,6 +119,17 @@ async def _fan_out(r: aioredis.Redis, sockets: DriverSockets, ops: OpsHub) -> No
                 ops.broadcast(_frame("hexes", data))
             elif channel == KPIS:
                 ops.broadcast(_frame("kpis", data))
+            elif channel == FORECAST:
+                ops.broadcast(_frame("forecast", data))
+            elif channel == REPOSITION:
+                with contextlib.suppress(ValueError):
+                    batch = json.loads(data)
+                    for m in batch.get("moves", []):
+                        await sockets.deliver({"type": "reposition", "driver_id": m["driver_id"],
+                                               "target": [m["lat"], m["lng"]], "to": m["to"]})
+                    ops.broadcast(_frame("reposition", json.dumps(
+                        {"t": batch.get("t"), "n": len(batch.get("moves", [])),
+                         "flows": [[m["from"], m["to"]] for m in batch.get("moves", [])]}, separators=(",", ":"))))
     finally:
         await pubsub.aclose()
 

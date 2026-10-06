@@ -122,7 +122,7 @@ class WebSocketTransport:
         try:
             async for raw in ws:
                 msg = json.loads(raw)
-                if msg.get("type") == "assignment":
+                if msg.get("type") in ("assignment", "reposition"):
                     self.inbox.append(msg)
                 elif msg.get("type") == "trip_done_ack" and not msg.get("ok"):
                     self.release_failures += 1

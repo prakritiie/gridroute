@@ -6,7 +6,12 @@
   demand   ride requests per res-9 cell in the last 5 min, read straight off stream:rides (entry ids are
            ms timestamps, so windows need no extra state); matcher retries are skipped
   rollup   res 9 -> res 8 / res 7 by H3 parent, for GET /hexes?res= and the dashboard
-  history  15-min request counts per res-7 hex -> demand_hist:{res7} (last 672 slots), for the M3 forecaster
+  history  15-min request counts per res-7 hex -> demand_hist:{res7} (last 2688 slots = 28 days), for the
+           forecaster. Slots follow the sim clock (core.clock), so a x10 replay rolls one every 90 s; counts are
+           divided by config:demand_scale (a 20% replay reports full-city numbers, the units the model learnt).
+           demand_hist:last_slot is the last slot written; a replay's warm start sets it, and a clock jump
+           (backwards, or a gap over MAX_GAP slots, e.g. a laptop sleep) restarts the history instead of
+           padding it with zeros that never happened.
   audit    a background thread runs tools.audit every 10 s and publishes the live double-booking count
 
 Writes hexes:snapshot + kpis:latest, publishes ch:hexes + ch:kpis.
@@ -23,14 +28,15 @@ from collections import Counter, deque
 import h3
 import redis
 
-from core import config, metrics
+from core import clock, config, metrics
 from tools.audit import audit
 
 RIDES, EVENTS = "stream:rides", "stream:events"
 DEMAND_WINDOW_MS = 5 * 60_000
 KPI_WINDOW_MS = 60_000
-SLOT_MS = 15 * 60_000
-HIST_LEN = 672                      # 7 days of 15-min slots
+HIST_LEN = 4 * 672                  # 28 days of 15-min slots (core.demand_features.HISTORY)
+LAST_SLOT = "demand_hist:last_slot"
+MAX_GAP = 4                         # finished slots we may still fill after a pause (1 h)
 
 
 def _id_ms(entry_id: str) -> int:
@@ -46,8 +52,8 @@ class Aggregator:
         self.events_cursor = f"{now - DEMAND_WINDOW_MS}-0"
         self.requests: deque[tuple[int, str]] = deque()        # (t_ms, res9 cell)
         self.events: deque[tuple[int, str, int]] = deque()     # (t_ms, type, eta_s)
-        self.slot = now // SLOT_MS
-        self.slot_counts: Counter[str] = Counter()             # res7 -> requests in the current slot
+        self.clock = clock.read(r)
+        self.slot_counts: dict[int, Counter[str]] = {}         # sim slot -> res7 -> requests
         self.fleet = {"busy": 0, "online": 0, "double_bookings": 0, "violations": 0, "audited_at": None}
 
     # ---- input ------------------------------------------------------------
@@ -71,8 +77,8 @@ class Aggregator:
                 continue
             t = _id_ms(entry_id)
             self.requests.append((t, cell))
-            if t // SLOT_MS == self.slot:
-                self.slot_counts[h3.cell_to_parent(cell, config.RES_DEMAND)] += 1
+            slot = clock.slot_of(clock.at(self.clock, t))
+            self.slot_counts.setdefault(slot, Counter())[h3.cell_to_parent(cell, config.RES_DEMAND)] += 1
 
         events, self.events_cursor = self._read_new(EVENTS, self.events_cursor)
         for entry_id, f in events:
@@ -136,21 +142,52 @@ class Aggregator:
             "audited_at": self.fleet["audited_at"],
         }
 
-    def roll_demand_history(self, now: int) -> bool:
-        """At each 15-min boundary, append the finished slot's count to every known res-7 history."""
-        slot = now // SLOT_MS
-        if slot == self.slot:
-            return False
-        known = {k.split(":", 1)[1] for k in self.r.scan_iter("demand_hist:*", count=1000)}
-        pipe = self.r.pipeline(transaction=False)
-        for hex7 in known | set(self.slot_counts):
-            key = f"demand_hist:{hex7}"
-            pipe.rpush(key, self.slot_counts.get(hex7, 0))
-            pipe.ltrim(key, -HIST_LEN, -1)
-        pipe.execute()
-        self.slot, self.slot_counts = slot, Counter(
-            h3.cell_to_parent(c, config.RES_DEMAND) for t, c in self.requests if t // SLOT_MS == slot)
-        return True
+    def roll_demand_history(self, now: int) -> int:
+        """Append every finished slot's counts to each res-7 history. Returns the number of slots written.
+        Runs under WATCH on the last slot and the sim clock: if a replay seeds the history or moves the clock
+        meanwhile, this pass is dropped and the next one sees the new state (a seed is never overwritten)."""
+        with self.r.pipeline(transaction=True) as pipe:
+            try:
+                pipe.watch(LAST_SLOT, clock.KEY)
+                self.clock = clock.read(pipe)
+                cur = clock.slot_of(clock.at(self.clock, now))
+                raw = pipe.get(LAST_SLOT)
+                last = int(raw) if raw is not None else None
+                if last is not None and last == cur - 1:
+                    return 0
+                hist = [k for k in pipe.scan_iter("demand_hist:*", count=1000) if k != LAST_SLOT]
+                if last is None or last >= cur or cur - 1 - last > MAX_GAP:
+                    # First run, clock went backwards, or a long pause: start a fresh history from here.
+                    pipe.multi()
+                    if last is not None and hist:
+                        pipe.delete(*hist)
+                    pipe.set(LAST_SLOT, cur - 1)
+                    pipe.execute()
+                    if last is not None:
+                        print(f"aggregator: demand history restarted (last slot {last}, now {cur})", flush=True)
+                    self._drop_counts_before(cur)
+                    return 0
+                scale = float(pipe.get("config:demand_scale") or 1.0) or 1.0
+                known = {k.split(":", 1)[1] for k in hist}
+                for slot in range(last + 1, cur):
+                    known |= set(self.slot_counts.get(slot, ()))
+                pipe.multi()
+                for slot in range(last + 1, cur):
+                    counts = self.slot_counts.get(slot, Counter())
+                    for hex7 in known:
+                        pipe.rpush(f"demand_hist:{hex7}", f"{counts.get(hex7, 0) / scale:.6g}")
+                for hex7 in known:
+                    pipe.ltrim(f"demand_hist:{hex7}", -HIST_LEN, -1)
+                pipe.set(LAST_SLOT, cur - 1)
+                pipe.execute()
+            except redis.WatchError:
+                return 0
+        self._drop_counts_before(cur)
+        return cur - 1 - last
+
+    def _drop_counts_before(self, slot: int) -> None:
+        for s_ in [s_ for s_ in self.slot_counts if s_ < slot]:
+            del self.slot_counts[s_]
 
     def run_audit(self) -> None:
         """Fleet counts + invariant audit (slow path, every 10 s in a thread)."""
@@ -175,6 +212,7 @@ class Aggregator:
 
     def step(self, now: int | None = None, publish_kpis: bool = True) -> dict:
         now = now if now is not None else int(time.time() * 1000)
+        self.clock = clock.read(self.r)
         self.ingest_streams(now)
         snap = self.snapshot(now)
         body = json.dumps(snap, separators=(",", ":"))

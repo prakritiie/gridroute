@@ -151,14 +151,19 @@ class Live:
         self.fleet.start_leg(driver_id, Leg(kind, ride_id, route, self.sim_now(),
                                             max(1.0, route.duration_s * self.factor(*frm))))
 
-    async def cruise(self, driver_id: str) -> None:
+    async def cruise(self, driver_id: str, to: tuple[float, float] | None = None) -> None:
+        """Roam to a nearby real spot, or (to given) drive where the repositioner sent the driver."""
         try:
             d = self.fleet.drivers[driver_id]
             frm = (d.lat, d.lng)
-            to = self.nearby_point(*frm)
-            route = await osrm.route(self.http, frm, to) or straight_route(frm, to)
-            self.fleet.start_cruise(driver_id, Leg("cruise", "", route, self.sim_now(),
-                                                   max(1.0, route.duration_s * self.factor(*frm))))
+            target = to or self.nearby_point(*frm)
+            route = await osrm.route(self.http, frm, target) or straight_route(frm, target)
+            leg = Leg("reposition" if to else "cruise", "", route, self.sim_now(),
+                      max(1.0, route.duration_s * self.factor(*frm)))
+            if to:
+                self.fleet.reposition(driver_id, leg)
+            else:
+                self.fleet.start_cruise(driver_id, leg)
         finally:
             self.cruise_pending.discard(driver_id)
 
@@ -194,6 +199,12 @@ class Live:
 
             # offers: accept, then drive to the pickup over the road
             for msg in self.tx.drain():
+                if msg.get("type") == "reposition":
+                    d = self.fleet.drivers.get(msg["driver_id"])
+                    if d and d.mode == IDLE and d.id not in self.dead and d.id not in self.cruise_pending:
+                        self.cruise_pending.add(d.id)
+                        self.spawn(self.cruise(d.id, (float(msg["target"][0]), float(msg["target"][1]))))
+                    continue
                 d = self.fleet.drivers.get(msg["driver_id"])
                 if d is None or d.id in self.dead or not self.fleet.accept(d.id, msg["ride_id"]):
                     continue

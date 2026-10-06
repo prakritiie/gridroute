@@ -15,9 +15,10 @@ import redis
 
 from core import config
 
-STATE_PATTERNS = ("driver:*", "cell:*", "lock:driver:*", "ride:*", "explain:*", "demand_hist:*")
+STATE_PATTERNS = ("driver:*", "cell:*", "lock:driver:*", "ride:*", "explain:*", "demand_hist:*", "repos:*")
 STATE_KEYS = ("active_cells", "offers", "rides:open", "hexes:snapshot", "kpis:latest",
-              "config:max_attempts", "config:policy", "config:sim_clock", "run:current")
+              "config:max_attempts", "config:policy", "config:sim_clock", "run:current",
+              "forecast:snapshot", "config:reposition", "config:demand_scale")
 STREAMS = ("stream:pings", "stream:rides", "stream:events")
 
 

@@ -51,6 +51,16 @@ services:
     <<: *app
     command: ["python", "-m", "workers.aggregator"]
 
+  forecaster:
+    <<: *app
+    command: ["python", "-m", "workers.forecaster"]
+    volumes:
+      - ./models:/app/models:ro      # models/demand/vN; model:demand:current picks the version
+
+  repositioner:
+    <<: *app
+    command: ["python", "-m", "workers.repositioner"]   # idle unless config:reposition=1 (replay --reposition)
+
   sim:
     <<: *app
     command: ["python", "-m", "sim.live", "--drivers", "${SIM_DRIVERS:-5000}"]

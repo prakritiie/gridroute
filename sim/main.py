@@ -52,6 +52,8 @@ async def run(a: argparse.Namespace) -> None:
             killed = True
 
         for msg in tx.drain():
+            if msg.get("type") != "assignment":
+                continue                                    # the legacy straight-line world never repositions
             if world.assign(msg["driver_id"], msg["ride_id"], msg["pickup"], msg.get("dropoff")):
                 assigned += 1
                 await _maybe(tx.accept(msg["driver_id"], msg["ride_id"]))

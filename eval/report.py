@@ -53,6 +53,9 @@ def run_metrics(run_dir: Path, warmup_s: float = WARMUP_S) -> dict:
         "SELECT drivers, sim_hours, empty_km, loaded_km, conflicts FROM ev WHERE type = 'fleet' ORDER BY id DESC LIMIT 1"
     ).fetchone()
     empty_per_h = fleet[2] / (fleet[0] * fleet[1]) if fleet and fleet[0] else None
+    ev_cols = [c[0] for c in con.execute("DESCRIBE ev").fetchall()]
+    repos = con.execute("SELECT repos_km, repositions FROM ev WHERE type = 'fleet' ORDER BY id DESC LIMIT 1"
+                        ).fetchone() if "repos_km" in ev_cols else None
     # Supply-demand mismatch: how many drivers sat idle while riders gave up? Busy = matched - completed,
     # reconstructed from event wall times; compared per 5-sim-minute slot with that slot's unmatched rate.
     speed = float(cfg.get("speed", 10))
@@ -78,6 +81,9 @@ def run_metrics(run_dir: Path, warmup_s: float = WARMUP_S) -> dict:
         "conflicts": int(fleet[4]) if fleet else None,
         "idle_when_unmatched": idle_when_unmatched,
         "eta_mae_s": eta_err,
+        "repos_km_per_driver_h": repos[0] / (fleet[0] * fleet[1]) if repos and repos[0] is not None and fleet
+        and fleet[0] else None,
+        "repositions": int(repos[1]) if repos and repos[1] is not None else None,
     }
 
 
