@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GridRoute architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0f172a; --ink-2: #475569; --ink-3: #94a3b8; --line: #e2e8f0; --bg: #f8fafc;
+    --blue: #2563eb; --purple: #7c3aed; --green: #059669; --amber: #d97706; --red: #dc2626; --slate: #64748b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #fff; }
+  body { font-family: Inter, system-ui, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  #canvas { position: relative; width: 1900px; height: 1120px; background: #fff; overflow: hidden; }
+
+  .header { position: absolute; left: 40px; top: 28px; right: 40px; display: flex; justify-content: space-between; align-items: flex-start; }
+  .title { display: flex; gap: 14px; align-items: center; }
+  .logo { width: 44px; height: 44px; border-radius: 11px; background: var(--ink); display: grid; place-items: center; }
+  .logo i { width: 20px; height: 20px; background: #fff; clip-path: polygon(50% 0, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%); }
+  .title h1 { margin: 0; font-size: 27px; font-weight: 700; letter-spacing: -0.02em; }
+  .title h1 span { font-weight: 500; color: var(--ink-2); }
+  .title p { margin: 4px 0 0; font-size: 14px; color: var(--ink-2); }
+  .legend { display: flex; gap: 22px; font-size: 13px; color: var(--ink-2); padding: 12px 16px; border: 1px solid var(--line); border-radius: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .legend b { display: inline-block; width: 26px; height: 0; border-top: 2.5px solid; }
+
+  .panel { position: absolute; border-radius: 18px; border: 1px solid var(--line); background: var(--bg); }
+  .panel h2 { position: absolute; left: 20px; top: 14px; margin: 0; font-size: 12.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .panel h2 small { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--ink-3); font-size: 12.5px; margin-left: 8px; }
+
+  .box { position: absolute; background: #fff; border: 1px solid var(--line); border-top: 3px solid var(--c, var(--ink)); border-radius: 12px; padding: 11px 14px; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+  .box h3 { margin: 0; font-size: 15.5px; font-weight: 650; letter-spacing: -0.01em; display: flex; justify-content: space-between; gap: 8px; }
+  .box p { margin: 4px 0 0; font-size: 12.8px; line-height: 1.4; color: var(--ink-2); }
+  .box code, .mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; color: var(--ink-2); }
+  .tag { font-size: 10.5px; font-weight: 600; color: var(--c, var(--ink)); background: color-mix(in srgb, var(--c, var(--ink)) 10%, #fff); border-radius: 999px; padding: 2px 8px; white-space: nowrap; align-self: center; }
+  .ml { margin-top: 7px; font-size: 11.5px; font-weight: 600; color: var(--green); background: #ecfdf5; border-radius: 7px; padding: 4px 8px; display: inline-block; }
+
+  .redis { position: absolute; background: #fff; border: 1px solid #fecaca; border-top: 3px solid var(--red); border-radius: 12px; padding: 12px 14px; }
+  .redis h3 { margin: 0; font-size: 16px; font-weight: 700; }
+  .redis > p { margin: 3px 0 10px; font-size: 12.8px; color: var(--ink-2); }
+  .slot { border: 1px solid #fde2e2; background: #fffafa; border-radius: 9px; padding: 8px 10px; margin-top: 8px; }
+  .slot b { display: block; font-size: 13px; font-weight: 600; }
+  .slot b::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--red); margin-right: 7px; vertical-align: 1px; }
+  .lua { margin-top: 10px; font-size: 12px; color: var(--red); background: #fef2f2; border-radius: 9px; padding: 8px 10px; line-height: 1.45; }
+
+  .gw ul { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .gw li { font-family: "JetBrains Mono", monospace; font-size: 11.5px; padding: 5px 8px; border-radius: 7px; background: #f5f3ff; color: #4c1d95; display: flex; gap: 8px; }
+  .gw li em { font-style: normal; font-weight: 600; color: var(--purple); min-width: 34px; }
+
+  .steps { position: absolute; padding: 18px 20px; }
+  .steps ol { list-style: none; margin: 34px 0 0; padding: 0; display: flex; flex-direction: column; gap: 13px; }
+  .steps li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; font-size: 13.2px; line-height: 1.42; color: var(--ink-2); }
+  .steps li strong { color: var(--ink); font-weight: 600; }
+  .n { width: 24px; height: 24px; border-radius: 50%; color: #fff; font-size: 12.5px; font-weight: 700; display: grid; place-items: center; background: var(--c); }
+
+  .num { position: absolute; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; color: #fff; font-size: 12.5px; font-weight: 700; display: grid; place-items: center; background: var(--c); box-shadow: 0 0 0 3px #fff; z-index: 3; }
+  .lbl { position: absolute; transform: translate(-50%, -50%); font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px; background: #fff; border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; z-index: 3; }
+  svg { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+  .flow { position: absolute; font-size: 22px; color: var(--ink-3); transform: translate(-50%, -50%); z-index: 3; }
+</style>
+</head>
+<body>
+<div id="canvas">
+
+  <!-- header -->
+  <div class="header">
+    <div class="title">
+      <div class="logo"><i></i></div>
+      <div>
+        <h1>GridRoute <span>· how it works</span></h1>
+        <p>Real-time ride dispatch on Uber's H3 hex grid, with a learned ETA and a 15-minute demand forecast.</p>
+      </div>
+    </div>
+    <div class="legend">
+      <span><b style="border-color: var(--blue)"></b>Location data</span>
+      <span><b style="border-color: var(--purple)"></b>Rides and offers</span>
+      <span><b style="border-color: var(--green)"></b>Machine learning</span>
+      <span><b style="border-color: var(--slate); border-top-style: dashed"></b>Periodic or offline</span>
+    </div>
+  </div>
+
+  <!-- ===================== live system ===================== -->
+  <div class="panel" style="left:30px; top:120px; width:1470px; height:680px;">
+    <h2 style="color: var(--blue)">Live system <small>one <code class="mono">docker compose up</code> · stateless services around one Redis</small></h2>
+  </div>
+
+  <!-- clients -->
+  <div class="box" style="--c: var(--blue); left:50px; top:175px; width:250px; height:110px;">
+    <h3>Driver app <span class="tag">simulated</span></h3>
+    <p>5,000 drivers driving real NYC streets (OSRM routes), pinging GPS every 4 s</p>
+  </div>
+  <div class="box" style="--c: var(--purple); left:50px; top:305px; width:250px; height:95px;">
+    <h3>Rider app <span class="tag">simulated</span></h3>
+    <p>Real 2016 taxi trips as ride requests</p>
+  </div>
+  <div class="box" style="--c: var(--ink); left:50px; top:420px; width:250px; height:125px;">
+    <h3>Ops console</h3>
+    <p>Next.js · deck.gl. Live hex map, KPIs, "why this driver", policy lab, chaos controls</p>
+  </div>
+  <div class="box" style="--c: var(--slate); left:50px; top:640px; width:250px; height:90px;">
+    <h3>Prometheus + Grafana</h3>
+    <p>Metrics from every service</p>
+  </div>
+
+  <!-- gateway -->
+  <div class="box gw" style="--c: var(--purple); left:370px; top:175px; width:240px; height:555px;">
+    <h3>API gateway</h3>
+    <p>FastAPI. Validates, queues work, fans results out to sockets. Holds no state.</p>
+    <ul>
+      <li><em>WS</em>/ws/driver</li>
+      <li><em>WS</em>/ws/ops</li>
+      <li><em>POST</em>/rides</li>
+      <li><em>GET</em>/rides/{id}/explain</li>
+      <li><em>GET</em>/hexes</li>
+      <li><em>POST</em>/runs</li>
+      <li><em>POST</em>/chaos</li>
+      <li><em>GET</em>/metrics</li>
+    </ul>
+  </div>
+
+  <!-- redis -->
+  <div class="redis" style="left:680px; top:175px; width:270px; height:555px;">
+    <h3>Redis 7</h3>
+    <p>The single source of live truth</p>
+    <div class="slot"><b>Streams</b><code>pings · rides · events · chaos</code></div>
+    <div class="slot"><b>H3 cell index</b><code>cell:{hex} → drivers by last ping</code></div>
+    <div class="slot"><b>Live state + leases</b><code>driver · ride · offer locks</code></div>
+    <div class="slot"><b>Demand</b><code>15-min history · forecast</code></div>
+    <div class="slot"><b>Pub/Sub</b><code>offers · hex map · KPIs</code></div>
+    <div class="lua">Every multi-key change is one atomic Lua script, so no driver can be double-booked.</div>
+  </div>
+
+  <!-- workers -->
+  <div class="box" style="--c: var(--blue); left:1030px; top:175px; width:250px; height:76px;">
+    <h3>Ingest</h3><p>Moves each driver to its H3 cell</p>
+  </div>
+  <div class="box" style="--c: var(--purple); left:1030px; top:263px; width:250px; height:118px;">
+    <h3>Matcher</h3><p>Every 2 s: nearby drivers → road-time cost → Hungarian assignment → atomic claim</p>
+    <span class="ml">ETA model · LightGBM</span>
+  </div>
+  <div class="box" style="--c: var(--slate); left:1030px; top:393px; width:250px; height:76px;">
+    <h3>Reaper</h3><p>Evicts silent drivers, re-queues lost offers</p>
+  </div>
+  <div class="box" style="--c: var(--slate); left:1030px; top:481px; width:250px; height:76px;">
+    <h3>Aggregator</h3><p>Hex supply / demand + KPIs, 2× per second</p>
+  </div>
+  <div class="box" style="--c: var(--green); left:1030px; top:569px; width:250px; height:76px;">
+    <h3>Forecaster</h3><p>Requests per area, next 15 min <span class="tag" style="--c: var(--green)">LightGBM</span></p>
+  </div>
+  <div class="box" style="--c: var(--green); left:1030px; top:657px; width:250px; height:76px;">
+    <h3>Repositioner</h3><p>Nudges idle drivers toward shortfalls</p>
+  </div>
+
+  <!-- shared services -->
+  <div class="box" style="--c: var(--green); left:1335px; top:280px; width:150px; height:84px;">
+    <h3>OSRM</h3><p>Road times on the NYC street map</p>
+  </div>
+  <div class="box" style="--c: var(--green); left:1335px; top:540px; width:150px; height:104px;">
+    <h3>Model registry</h3><p><code>models/eta/vN</code><br><code>models/demand/vN</code></p>
+  </div>
+
+  <!-- follow one ride -->
+  <div class="panel steps" style="left:1520px; top:120px; width:350px; height:680px;">
+    <h2 style="color: var(--ink)">Follow one ride</h2>
+    <ol>
+      <li><span class="n" style="--c: var(--blue)">1</span><span><strong>Drivers stream GPS pings</strong> through the gateway into a Redis stream.</span></li>
+      <li><span class="n" style="--c: var(--blue)">2</span><span><strong>Ingest files each driver under its hexagon</strong> (~0.1 km²). Late or out-of-order pings are rejected.</span></li>
+      <li><span class="n" style="--c: var(--purple)">3</span><span><strong>A rider requests a ride.</strong> It waits in the rides stream.</span></li>
+      <li><span class="n" style="--c: var(--purple)">4</span><span><strong>The matcher batches riders every 2 s</strong>, finds drivers in nearby hexagons, scores them by road time (OSRM + ETA model), assigns the batch jointly and claims each driver in one atomic step.</span></li>
+      <li><span class="n" style="--c: var(--purple)">5</span><span><strong>The driver gets the offer</strong> and has 15 s to accept; otherwise the ride goes back in the queue.</span></li>
+      <li><span class="n" style="--c: var(--ink)">6</span><span><strong>The console updates live:</strong> hex map, KPIs, and why each driver was chosen.</span></li>
+      <li><span class="n" style="--c: var(--green)">7</span><span><strong>Looking ahead,</strong> the forecaster predicts demand per area and the repositioner moves idle drivers toward it.</span></li>
+    </ol>
+  </div>
+
+  <!-- ===================== bottom bands ===================== -->
+  <div class="panel" style="left:30px; top:850px; width:900px; height:250px;">
+    <h2 style="color: var(--purple)">Experiments and demo <small>replay real demand</small></h2>
+  </div>
+  <div class="box" style="--c: var(--purple); left:50px; top:900px; width:156px; height:150px;">
+    <h3>Policy lab</h3><p>Pick a June 2016 window: greedy or batch, distance or ETA, repositioning on/off</p>
+  </div>
+  <div class="box" style="--c: var(--purple); left:226px; top:900px; width:156px; height:150px;">
+    <h3>Runner</h3><p>Pauses the demo, replays real requests at their real times</p>
+  </div>
+  <div class="box" style="--c: var(--purple); left:402px; top:900px; width:156px; height:150px;">
+    <h3>Recorder</h3><p>Every event → Parquet. Three seeds per policy.</p>
+  </div>
+  <div class="box" style="--c: var(--ink); left:578px; top:900px; width:156px; height:150px;">
+    <h3>Results</h3><p>Report R0–R4 in the README; playback → demo on Vercel</p>
+  </div>
+  <div class="box" style="--c: var(--slate); left:754px; top:900px; width:156px; height:150px; border-style: dashed; border-top-style: solid;">
+    <h3>Benchmarks</h3><p>H3 vs Redis GEO vs PostGIS, k6 load, 1k → 100k drivers</p>
+  </div>
+  <div class="lbl" style="left:50px; top:1066px; transform:none; border:0; background:transparent; font-weight:500; color:var(--ink-2); font-size:12.5px;">
+    <b style="color: var(--ink)">Finding:</b> batching beat the ETA model on its own; forecast-driven repositioning cut unserved riders 13.5% → 7.4%.
+  </div>
+
+  <div class="panel" style="left:950px; top:850px; width:920px; height:250px;">
+    <h2 style="color: var(--amber)">Offline: data and models <small>run once · trained on the GPU</small></h2>
+  </div>
+  <div class="box" style="--c: var(--amber); left:970px; top:900px; width:160px; height:150px;">
+    <h3>NYC Open Data</h3><p>2016 yellow-taxi trips, Jan–Jun: 69.4M rows</p>
+  </div>
+  <div class="box" style="--c: var(--amber); left:1150px; top:900px; width:160px; height:150px;">
+    <h3>Clean</h3><p>DuckDB → Parquet. 67.0M valid trips; train Jan–Apr, test June</p>
+  </div>
+  <div class="box" style="--c: var(--green); left:1330px; top:900px; width:160px; height:150px;">
+    <h3>Features</h3><p>One shared function for training and serving, so the two never drift</p>
+  </div>
+  <div class="box" style="--c: var(--green); left:1510px; top:900px; width:160px; height:150px;">
+    <h3>Train</h3><p>LightGBM on CUDA: ETA (−39% error) and demand (8.4% WAPE)</p>
+  </div>
+  <div class="box" style="--c: var(--green); left:1690px; top:900px; width:160px; height:150px;">
+    <h3>Publish</h3><p>Only if it beats every baseline. Services hot-reload it.</p>
+  </div>
+
+  <!-- ===================== arrows ===================== -->
+  <svg width="1900" height="1190" viewBox="0 0 1900 1190">
+    <defs>
+      <marker id="a-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker>
+      <marker id="a-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7c3aed"/></marker>
+      <marker id="a-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#059669"/></marker>
+      <marker id="a-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0f172a"/></marker>
+      <marker id="a-slate" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker>
+      <marker id="a-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d97706"/></marker>
+    </defs>
+    <g fill="none" stroke-width="2.5">
+      <!-- clients <-> gateway -->
+      <path d="M300,215 H366" stroke="#2563eb" marker-end="url(#a-blue)"/>
+      <path d="M370,255 H304" stroke="#7c3aed" marker-end="url(#a-purple)"/>
+      <path d="M300,352 H366" stroke="#7c3aed" marker-end="url(#a-purple)"/>
+      <path d="M304,482 H366" stroke="#0f172a" marker-start="url(#a-ink)" marker-end="url(#a-ink)"/>
+      <path d="M370,685 H304" stroke="#64748b" stroke-dasharray="6 5" marker-end="url(#a-slate)"/>
+      <!-- gateway <-> redis -->
+      <path d="M610,235 H676" stroke="#2563eb" marker-end="url(#a-blue)"/>
+      <path d="M610,345 H676" stroke="#7c3aed" marker-end="url(#a-purple)"/>
+      <path d="M680,610 H614" stroke="#7c3aed" marker-end="url(#a-purple)"/>
+      <!-- workers <-> redis -->
+      <path d="M954,213 H1026" stroke="#2563eb" marker-start="url(#a-blue)" marker-end="url(#a-blue)"/>
+      <path d="M954,322 H1026" stroke="#7c3aed" marker-start="url(#a-purple)" marker-end="url(#a-purple)"/>
+      <path d="M954,431 H1026" stroke="#64748b" stroke-dasharray="6 5" marker-start="url(#a-slate)" marker-end="url(#a-slate)"/>
+      <path d="M954,519 H1026" stroke="#64748b" stroke-dasharray="6 5" marker-start="url(#a-slate)" marker-end="url(#a-slate)"/>
+      <path d="M954,607 H1026" stroke="#059669" stroke-dasharray="6 5" marker-start="url(#a-green)" marker-end="url(#a-green)"/>
+      <path d="M954,695 H1026" stroke="#059669" stroke-dasharray="6 5" marker-start="url(#a-green)" marker-end="url(#a-green)"/>
+      <!-- matcher -> OSRM ; registry -> matcher, forecaster -->
+      <path d="M1280,322 H1331" stroke="#059669" marker-end="url(#a-green)"/>
+      <path d="M1335,560 H1310 V350 H1284" stroke="#059669" stroke-dasharray="6 5" marker-end="url(#a-green)"/>
+      <path d="M1335,607 H1284" stroke="#059669" stroke-dasharray="6 5" marker-end="url(#a-green)"/>
+      <!-- offline: chain + publish -> registry -->
+      <path d="M1130,975 H1146" stroke="#d97706" marker-end="url(#a-amber)"/>
+      <path d="M1310,975 H1326" stroke="#d97706" marker-end="url(#a-amber)"/>
+      <path d="M1490,975 H1506" stroke="#059669" marker-end="url(#a-green)"/>
+      <path d="M1670,975 H1686" stroke="#059669" marker-end="url(#a-green)"/>
+      <path d="M1770,900 V825 H1410 V648" stroke="#059669" stroke-dasharray="6 5" marker-end="url(#a-green)"/>
+      <!-- experiments: chain + runner drives the live system -->
+      <path d="M206,975 H222" stroke="#7c3aed" marker-end="url(#a-purple)"/>
+      <path d="M382,975 H398" stroke="#7c3aed" marker-end="url(#a-purple)"/>
+      <path d="M558,975 H574" stroke="#7c3aed" marker-end="url(#a-purple)"/>
+      <path d="M376,900 V825 H490 V734" stroke="#7c3aed" stroke-dasharray="6 5" marker-end="url(#a-purple)"/>
+    </g>
+  </svg>
+
+  <!-- step numbers on the arrows -->
+  <div class="num" style="--c: var(--blue); left:335px; top:215px;">1</div>
+  <div class="num" style="--c: var(--purple); left:335px; top:255px;">5</div>
+  <div class="num" style="--c: var(--purple); left:335px; top:352px;">3</div>
+  <div class="num" style="--c: var(--ink); left:335px; top:482px;">6</div>
+  <div class="num" style="--c: var(--blue); left:990px; top:213px;">2</div>
+  <div class="num" style="--c: var(--purple); left:990px; top:322px;">4</div>
+  <div class="num" style="--c: var(--green); left:990px; top:607px;">7</div>
+
+  <!-- arrow labels -->
+  <div class="lbl" style="left:643px; top:221px;">pings</div>
+  <div class="lbl" style="left:643px; top:331px;">rides</div>
+  <div class="lbl" style="left:647px; top:596px;">offers, map</div>
+  <div class="lbl" style="left:337px; top:668px;">scrape</div>
+  <div class="lbl" style="left:1306px; top:308px;">road times</div>
+  <div class="lbl" style="left:1590px; top:825px;">publish a version</div>
+  <div class="lbl" style="left:548px; top:825px;">replays real requests</div>
+</div>
+</body>
+</html>

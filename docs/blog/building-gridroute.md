@@ -33,7 +33,7 @@ in a spatial index quickly enough that the next search sees it.
 **The slower loop** handles decisions. Every couple of seconds, look at the riders waiting, find candidate drivers
 near each, decide who goes where, and claim those drivers so nobody else can.
 
-![Architecture](../diagrams/architecture-v3-diagram-only.png)
+![How GridRoute works](../diagrams/architecture-v4.png)
 
 I kept the live state in a single Redis and made every service around it stateless: a FastAPI gateway, an ingest
 worker, a matcher, a reaper for silent drivers, an aggregator for the dashboard, and later a forecaster and a

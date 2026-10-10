@@ -46,7 +46,9 @@ Seed spreads, latency, and the pickup-estimate error per row: [docs/results.md](
 
 ## How it works
 
-![Architecture: clients, real-time core around Redis, shared services, offline ML pipeline, evaluation](docs/diagrams/architecture-v3-diagram-only.png)
+![How GridRoute works: the live system around Redis, the numbered path of one ride, experiments, and the offline data and model pipeline](docs/diagrams/architecture-v4.png)
+
+<sub>The original design diagram, with every connection numbered, is kept at [docs/diagrams/architecture-v3.png](docs/diagrams/architecture-v3.png).</sub>
 
 - **Location index.** Each ping moves a driver between H3 res-9 cells (~0.1 km²) in one Lua script that checks a
   sequence number, so late or reordered pings never move a driver backwards. Nearby search walks rings of cells
